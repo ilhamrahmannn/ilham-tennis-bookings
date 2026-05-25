@@ -362,17 +362,23 @@ export default function App() {
                   const dayString = day ? formatDate(day) : "";
                   const dayStatus = getDateStatus(day);
                   const isSelected = dayString === date;
+                  const today = new Date();
+                  today.setHours(0,0,0,0);
+
+                  const isPast = day && day < today;
 
                   return (
                     <button
                       key={index}
-                      disabled={!day}
+                      disabled={!day || isPast}
                       onClick={() => day && setDate(dayString)}
                       className={`min-h-20 rounded-2xl border p-2 text-left transition ${
-                        isSelected
-                          ? "border-lime-400 bg-lime-400 text-black"
-                          : "border-neutral-800 bg-neutral-950 hover:border-neutral-600"
-                      } ${!day ? "opacity-0" : ""}`}
+  isPast
+    ? "opacity-30 cursor-not-allowed border-neutral-900 bg-neutral-950"
+    : isSelected
+    ? "border-lime-400 bg-lime-400 text-black"
+    : "border-neutral-800 bg-neutral-950 hover:border-neutral-600"
+} ${!day ? "opacity-0" : ""}`}
                     >
                       {day && (
                         <>
