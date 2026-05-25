@@ -1,3 +1,4 @@
+import coachImage from "./assets/ilham.jpg";
 import { useEffect, useMemo, useState } from "react";
 
 const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzGYhVxmTWBevznTwPJhPybl-mXjnkUn0pBHQSIgHhtYcNnIEYAjfFMxgR2C-MM0NVaZQ/exec";
@@ -34,6 +35,89 @@ function getMonthDays(currentDate) {
   }
 
   return days;
+}
+function WeeklySchedule({ bookings, selectedDate, onSelectDate }) {
+  const start = new Date(selectedDate);
+  const day = start.getDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  start.setDate(start.getDate() + mondayOffset);
+
+  const weekDays = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    return d;
+  });
+
+  function getBooking(date, time) {
+    const dateString = formatDate(date);
+
+    return bookings.find(
+      (booking) =>
+        booking.date === dateString &&
+        booking.time === time &&
+        ["Pending", "Confirmed"].includes(booking.bookingStatus)
+    );
+  }
+
+  return (
+    <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8 mt-8">
+      <h2 className="text-2xl font-semibold mb-6">Weekly Schedule</h2>
+
+      <div className="overflow-x-auto">
+        <div className="min-w-[900px]">
+          <div className="grid grid-cols-8 bg-purple-400/70 text-black rounded-t-2xl overflow-hidden">
+            <div className="p-3 font-semibold">Time</div>
+
+            {weekDays.map((day) => (
+              <button
+                key={formatDate(day)}
+                onClick={() => onSelectDate(formatDate(day))}
+                className="p-3 text-center font-semibold hover:bg-lime-300"
+              >
+                <div>{day.toLocaleDateString("en-US", { month: "numeric", day: "numeric" })}</div>
+                <div className="text-xs uppercase">
+                  {day.toLocaleDateString("en-US", { weekday: "long" })}
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {allTimeSlots.map((slot, index) => (
+            <div
+              key={slot}
+              className={`grid grid-cols-8 border-b border-neutral-800 ${
+                index % 2 === 0 ? "bg-neutral-950" : "bg-neutral-900"
+              }`}
+            >
+              <div className="p-3 text-sm text-neutral-300 border-r border-neutral-800">
+                {slot}
+              </div>
+
+              {weekDays.map((day) => {
+                const booking = getBooking(day, slot);
+
+                return (
+                  <button
+                    key={`${formatDate(day)}-${slot}`}
+                    onClick={() => {
+                      onSelectDate(formatDate(day));
+                    }}
+                    className={`min-h-14 p-3 text-left text-sm border-r border-neutral-800 transition ${
+                      booking
+                        ? "text-black bg-lime-400 font-semibold"
+                        : "text-neutral-500 hover:bg-neutral-800"
+                    }`}
+                  >
+                    {booking ? booking.name || booking.note || "Booked" : ""}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function App() {
@@ -185,13 +269,36 @@ export default function App() {
   return (
     <div className="min-h-screen bg-neutral-950 text-white">
       <div className="max-w-6xl mx-auto px-5 py-12">
-        <div className="text-center">
-          <p className="inline-block rounded-full border border-lime-400/40 px-4 py-2 text-sm text-lime-300">
-            ITF Coaching Level 1 • Sport Science Level 1
-          </p>
-          <h1 className="mt-6 text-4xl md:text-6xl font-bold">Book Your Tennis Coaching Slot</h1>
-          <p className="mt-5 text-neutral-300 text-lg">Based at Nusa Duta Tennis Complex</p>
-        </div>
+        <div className="grid lg:grid-cols-2 gap-10 items-center">
+
+  <div>
+    <p className="inline-block rounded-full border border-lime-400/40 px-4 py-2 text-sm text-lime-300">
+      ITF Coaching Level 1 • Sport Science Level 1
+    </p>
+
+    <h1 className="mt-6 text-4xl md:text-6xl font-bold">
+      Train With Coach Ilham
+    </h1>
+
+    <p className="mt-5 text-neutral-300 text-lg">
+      Private tennis coaching built around your level, your pace, and your goals.
+    </p>
+
+    <p className="mt-3 text-neutral-400">
+      Based at Nusa Duta Tennis Complex
+    </p>
+  </div>
+
+  <div className="flex justify-center">
+    <img
+      src={coachImage}
+      alt="Coach Ilham"
+      className="w-full max-w-md rounded-3xl border border-neutral-800 object-cover shadow-2xl"
+    />
+  </div>
+
+</div>
+         
 
         <div className="grid lg:grid-cols-2 gap-8 mt-12">
           <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8">
@@ -228,10 +335,7 @@ export default function App() {
 
               <textarea rows="4" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Notes" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
 
-              <div className="bg-lime-400 text-black rounded-2xl p-5 text-center">
-                <div className="text-sm font-medium">Estimated Coaching Fee</div>
-                <div className="text-4xl font-bold mt-1">RM{price}</div>
-              </div>
+              
 
               <button onClick={submitBooking} disabled={loading || availableSlots.length === 0} className="w-full bg-white text-black rounded-2xl py-4 font-semibold hover:bg-neutral-200 transition disabled:opacity-50">
                 {loading ? "Please wait..." : "Book via WhatsApp"}
@@ -284,13 +388,13 @@ export default function App() {
               </div>
             </div>
 
-            <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8">
-              <h2 className="text-2xl font-semibold mb-5">Coaching Rates</h2>
-              <div className="grid sm:grid-cols-2 gap-4 text-neutral-300">
-                <div className="rounded-2xl bg-neutral-800 p-4"><div className="font-semibold text-white">1 Player</div><div>1 Hour — RM120</div><div>2 Hours — RM240</div></div>
-                <div className="rounded-2xl bg-neutral-800 p-4"><div className="font-semibold text-white">2 Players</div><div>1 Hour — RM150</div><div>2 Hours — RM300</div></div>
-              </div>
-            </div>
+            <WeeklySchedule
+              bookings={bookings}
+              selectedDate={date}
+              onSelectDate={setDate}
+            />
+
+            
 
             <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8">
               <h2 className="text-2xl font-semibold mb-5">Court Rental</h2>
