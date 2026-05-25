@@ -56,7 +56,7 @@ export default function App() {
   const bookedForSelectedDate = useMemo(() => {
     return bookings.filter(
       (booking) =>
-        booking.date === date &&
+        String(booking.date).slice(0,10) === date &&
         ["Pending", "Confirmed"].includes(booking.bookingStatus)
     );
   }, [bookings, date]);
@@ -174,7 +174,7 @@ export default function App() {
     if (!day) return null;
     const dayString = formatDate(day);
     const bookedCount = bookings.filter(
-      (booking) => booking.date === dayString && ["Pending", "Confirmed"].includes(booking.bookingStatus)
+      (booking) => String(booking.date).slice(0,10) === dayString&& ["Pending", "Confirmed"].includes(booking.bookingStatus)
     ).length;
 
     if (bookedCount >= allTimeSlots.length) return "Full";
