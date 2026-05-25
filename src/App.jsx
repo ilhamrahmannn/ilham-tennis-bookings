@@ -12,6 +12,7 @@ const allTimeSlots = [
   "8:00 AM", "9:00 AM", "10:00 AM", "11:00 AM", "12:00 PM",
   "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM", "5:00 PM",
   "6:00 PM", "7:00 PM", "8:00 PM", "9:00 PM", "10:00 PM",
+"11:00 PM",
 ];
 
 function formatDate(date) {
@@ -54,7 +55,16 @@ function WeeklySchedule({ bookings, selectedDate, onSelectDate }) {
     return bookings.find(
       (booking) =>
         booking.date === dateString &&
-        booking.time === time &&
+        (() => {
+  const startIndex = allTimeSlots.indexOf(booking.time);
+  const currentIndex = allTimeSlots.indexOf(time);
+  const duration = Number(booking.duration || 1);
+
+  return (
+    currentIndex >= startIndex &&
+    currentIndex < startIndex + duration
+  );
+})() &&
         ["Pending", "Confirmed"].includes(booking.bookingStatus)
     );
   }
@@ -146,7 +156,18 @@ export default function App() {
   }, [bookings, date]);
 
   useEffect(() => {
-    const bookedTimes = bookedForSelectedDate.map((booking) => booking.time);
+    const bookedTimes = [];
+
+bookedForSelectedDate.forEach((booking) => {
+  const startIndex = allTimeSlots.indexOf(booking.time);
+  const duration = Number(booking.duration || 1);
+
+  for (let i = 0; i < duration; i++) {
+    if (allTimeSlots[startIndex + i]) {
+      bookedTimes.push(allTimeSlots[startIndex + i]);
+    }
+  }
+});
     const nextAvailableSlots = allTimeSlots.filter((slot) => !bookedTimes.includes(slot));
     setAvailableSlots(nextAvailableSlots);
 
