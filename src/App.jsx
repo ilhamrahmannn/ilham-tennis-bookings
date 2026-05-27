@@ -1,7 +1,16 @@
 import coachImage from "./assets/ilham.jpg";
 import { useEffect, useMemo, useState } from "react";
 
+
+
+
 const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzGYhVxmTWBevznTwPJhPybl-mXjnkUn0pBHQSIgHhtYcNnIEYAjfFMxgR2C-MM0NVaZQ/exec";
+
+
+
+const ADMIN_PASSWORD = "coachilham123";
+
+
 
 const rates = {
   1: { 1: 120, 2: 240 },
@@ -130,7 +139,105 @@ function WeeklySchedule({ bookings, selectedDate, onSelectDate }) {
   );
 }
 
+function AdminDashboard({ bookings, onRefresh }) {
+  const [password, setPassword] = useState("");
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  if (!isLoggedIn) {
+    return (
+      <div className="min-h-screen bg-neutral-950 text-white flex items-center justify-center px-5">
+        <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl p-8">
+          <h1 className="text-3xl font-bold">Coach Admin Login</h1>
+          <p className="mt-2 text-neutral-400">Enter admin password to view bookings.</p>
+
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Admin password"
+            className="mt-6 w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400"
+          />
+
+          <button
+            onClick={() => {
+              if (password === ADMIN_PASSWORD) {
+                setIsLoggedIn(true);
+              } else {
+                alert("Wrong password");
+              }
+            }}
+            className="mt-4 w-full bg-lime-400 text-black rounded-2xl py-4 font-semibold"
+          >
+            Login
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-neutral-950 text-white px-5 py-10">
+      <div className="max-w-6xl mx-auto">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-4xl font-bold">Admin Dashboard</h1>
+            <p className="mt-2 text-neutral-400">Manage Coach Ilham booking requests.</p>
+          </div>
+
+          <button
+            onClick={onRefresh}
+            className="rounded-2xl bg-white text-black px-5 py-3 font-semibold"
+          >
+            Refresh
+          </button>
+        </div>
+
+        <div className="mt-8 overflow-x-auto rounded-3xl border border-neutral-800">
+          <table className="w-full min-w-[1000px] bg-neutral-900 text-sm">
+            <thead className="bg-neutral-800 text-neutral-300">
+              <tr>
+                <th className="p-4 text-left">Date</th>
+                <th className="p-4 text-left">Time</th>
+                <th className="p-4 text-left">Name</th>
+                <th className="p-4 text-left">Phone</th>
+                <th className="p-4 text-left">Players</th>
+                <th className="p-4 text-left">Duration</th>
+                <th className="p-4 text-left">Location</th>
+                <th className="p-4 text-left">Payment</th>
+                <th className="p-4 text-left">Status</th>
+                <th className="p-4 text-left">Note</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {bookings.map((booking, index) => (
+                <tr key={index} className="border-t border-neutral-800">
+                  <td className="p-4">{booking.date}</td>
+                  <td className="p-4">{booking.time}</td>
+                  <td className="p-4 font-semibold text-lime-300">{booking.name}</td>
+                  <td className="p-4">{booking.phone}</td>
+                  <td className="p-4">{booking.players}</td>
+                  <td className="p-4">{booking.duration}</td>
+                  <td className="p-4">{booking.location}</td>
+                  <td className="p-4">{booking.paymentStatus}</td>
+                  <td className="p-4">{booking.bookingStatus}</td>
+                  <td className="p-4">{booking.note}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <a href="/" className="inline-block mt-6 text-lime-400">
+          ← Back to booking page
+        </a>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
+  const isAdminPage = window.location.pathname === "/admin";
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [players, setPlayers] = useState(1);
@@ -286,6 +393,10 @@ bookedForSelectedDate.forEach((booking) => {
     if (bookedCount > 0) return `${allTimeSlots.length - bookedCount} slots left`;
     return "Available";
   }
+
+  if (isAdminPage) {
+  return <AdminDashboard bookings={bookings} onRefresh={loadBookings} />;
+}
 
   return (
     <div className="min-h-screen bg-neutral-950 text-white">
