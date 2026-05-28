@@ -31,6 +31,18 @@ function formatDate(date) {
   return `${year}-${month}-${day}`;
 }
 
+function isPastTimeSlot(dateString, timeSlot) {
+  const todayString = formatDate(new Date());
+
+  if (dateString !== todayString) return false;
+
+  const now = new Date();
+  const slotDate = new Date(`${dateString} ${timeSlot}`);
+
+  return slotDate <= now;
+}
+
+
 function getMonthDays(currentDate) {
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
@@ -114,18 +126,22 @@ function WeeklySchedule({ bookings, selectedDate, onSelectDate }) {
               {weekDays.map((day) => {
                 const booking = getBooking(day, slot);
 
+                const isPastSlot = isPastTimeSlot(formatDate(day), slot);
+
                 return (
                   <button
                     key={`${formatDate(day)}-${slot}`}
                     onClick={() => {
                       onSelectDate(formatDate(day));
                     }}
-                    className={`min-h-14 p-3 text-left text-sm border-r border-neutral-800 transition ${booking
-                        ? "text-black bg-lime-400 font-semibold"
-                        : "text-neutral-500 hover:bg-neutral-800"
+                    className={`min-h-14 p-3 text-left text-sm border-r border-neutral-800 transition ${isPastSlot
+  ? "opacity-30 cursor-not-allowed text-neutral-600 bg-neutral-950"
+  : booking
+  ? "text-black bg-lime-400 font-semibold"
+  : "text-neutral-500 hover:bg-neutral-800"
                       }`}
                   >
-                    {booking ? booking.name || booking.note || "Booked" : ""}
+                    {isPastSlot ? "" : booking ? booking.name || booking.note || "Booked" : ""}
                   </button>
                 );
               })}
@@ -506,7 +522,9 @@ export default function App() {
         }
       }
     });
-    const nextAvailableSlots = allTimeSlots.filter((slot) => !bookedTimes.includes(slot));
+    const nextAvailableSlots = allTimeSlots.filter(
+  (slot) => !bookedTimes.includes(slot) && !isPastTimeSlot(date, slot)
+);
     setAvailableSlots(nextAvailableSlots);
 
     if (!nextAvailableSlots.includes(time)) {
