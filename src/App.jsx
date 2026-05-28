@@ -94,7 +94,7 @@ function WeeklySchedule({ bookings, selectedDate, onSelectDate }) {
     <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8 mt-8">
       <h2 className="text-2xl font-semibold mb-6">Weekly Schedule</h2>
 
-      <div className="overflow-x-auto">
+     <div className="overflow-x-auto max-w-full">
         <div className="min-w-[900px]">
           <div className="grid grid-cols-8 bg-purple-400/70 text-black rounded-t-2xl overflow-hidden">
             <div className="p-3 font-semibold">Time</div>
@@ -648,9 +648,8 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-white">
-      <div className="max-w-6xl mx-auto px-4 sm:px-5 py-8 sm:py-12 overflow-hidden">
-
+    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-neutral-950 text-white">
+      <div className="w-full max-w-6xl mx-auto px-4 py-8 sm:px-5 sm:py-12">
         <div className="flex justify-end mb-6">
           <a
             href="/admin"
@@ -692,8 +691,8 @@ export default function App() {
         </div>
 
 
-        <div className="grid lg:grid-cols-2 gap-8 mt-12">
-          <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-12">
+          <div className="w-full max-w-full bg-neutral-900 border border-neutral-800 rounded-3xl p-4 sm:p-6 md:p-8">
             <h2 className="text-2xl font-semibold mb-6">Booking Form</h2>
 
             <div className="space-y-4">
