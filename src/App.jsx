@@ -649,7 +649,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-neutral-950 text-white">
-      <div className="max-w-6xl mx-auto px-5 py-12">
+      <div className="max-w-6xl mx-auto px-4 sm:px-5 py-8 sm:py-12 overflow-hidden">
 
         <div className="flex justify-end mb-6">
           <a
@@ -661,7 +661,7 @@ export default function App() {
         </div>
 
 
-        <div className="grid lg:grid-cols-2 gap-10 items-center">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-10 items-center overflow-hidden">
 
           <div>
             <p className="inline-block rounded-full border border-lime-400/40 px-4 py-2 text-sm text-lime-300">
@@ -685,7 +685,7 @@ export default function App() {
             <img
               src={coachImage}
               alt="Coach Ilham"
-              className="w-full max-w-md rounded-3xl border border-neutral-800 object-cover shadow-2xl"
+              className="w-full max-w-sm sm:max-w-md rounded-3xl border border-neutral-800 object-cover shadow-2xl"
             />
           </div>
 
