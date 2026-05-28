@@ -522,6 +522,17 @@ bookedForSelectedDate.forEach((booking) => {
   return (
     <div className="min-h-screen bg-neutral-950 text-white">
       <div className="max-w-6xl mx-auto px-5 py-12">
+
+      <div className="flex justify-end mb-6">
+  <a
+    href="/admin"
+    className="rounded-full border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-lime-400 hover:text-lime-300 transition"
+  >
+    Admin Login
+  </a>
+</div>
+
+
         <div className="grid lg:grid-cols-2 gap-10 items-center">
 
   <div>
