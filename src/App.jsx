@@ -21,7 +21,7 @@ const allTimeSlots = [
   "8:00 AM", "9:00 AM", "10:00 AM", "11:00 AM", "12:00 PM",
   "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM", "5:00 PM",
   "6:00 PM", "7:00 PM", "8:00 PM", "9:00 PM", "10:00 PM",
-"11:00 PM",
+  "11:00 PM",
 ];
 
 function formatDate(date) {
@@ -65,16 +65,16 @@ function WeeklySchedule({ bookings, selectedDate, onSelectDate }) {
       (booking) =>
         booking.date === dateString &&
         (() => {
-  const startIndex = allTimeSlots.indexOf(booking.time);
-  const currentIndex = allTimeSlots.indexOf(time);
-  const duration = Number(booking.duration || 1);
+          const startIndex = allTimeSlots.indexOf(booking.time);
+          const currentIndex = allTimeSlots.indexOf(time);
+          const duration = Number(booking.duration || 1);
 
-  return (
-    currentIndex >= startIndex &&
-    currentIndex < startIndex + duration
-  );
-})() &&
-        ["Pending", "Confirmed"].includes(booking.bookingStatus)
+          return (
+            currentIndex >= startIndex &&
+            currentIndex < startIndex + duration
+          );
+        })() &&
+        ["Confirmed"].includes(booking.bookingStatus)
     );
   }
 
@@ -104,9 +104,8 @@ function WeeklySchedule({ bookings, selectedDate, onSelectDate }) {
           {allTimeSlots.map((slot, index) => (
             <div
               key={slot}
-              className={`grid grid-cols-8 border-b border-neutral-800 ${
-                index % 2 === 0 ? "bg-neutral-950" : "bg-neutral-900"
-              }`}
+              className={`grid grid-cols-8 border-b border-neutral-800 ${index % 2 === 0 ? "bg-neutral-950" : "bg-neutral-900"
+                }`}
             >
               <div className="p-3 text-sm text-neutral-300 border-r border-neutral-800">
                 {slot}
@@ -121,11 +120,10 @@ function WeeklySchedule({ bookings, selectedDate, onSelectDate }) {
                     onClick={() => {
                       onSelectDate(formatDate(day));
                     }}
-                    className={`min-h-14 p-3 text-left text-sm border-r border-neutral-800 transition ${
-                      booking
+                    className={`min-h-14 p-3 text-left text-sm border-r border-neutral-800 transition ${booking
                         ? "text-black bg-lime-400 font-semibold"
                         : "text-neutral-500 hover:bg-neutral-800"
-                    }`}
+                      }`}
                   >
                     {booking ? booking.name || booking.note || "Booked" : ""}
                   </button>
@@ -143,65 +141,95 @@ function AdminDashboard({ bookings, onRefresh }) {
   const [password, setPassword] = useState("");
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
-const [blockStartDate, setBlockStartDate] = useState(formatDate(new Date()));
-const [blockEndDate, setBlockEndDate] = useState(formatDate(new Date()));
-const [blockStartTime, setBlockStartTime] = useState("8:00 AM");
-const [blockEndTime, setBlockEndTime] = useState("9:00 AM");
-const [blockNote, setBlockNote] = useState("NA");
-const [blockStatus, setBlockStatus] = useState("");
-const [currentPage, setCurrentPage] = useState(1);
-const rowsPerPage = 10;
+  const [blockStartDate, setBlockStartDate] = useState(formatDate(new Date()));
+  const [blockEndDate, setBlockEndDate] = useState(formatDate(new Date()));
+  const [blockStartTime, setBlockStartTime] = useState("8:00 AM");
+  const [blockEndTime, setBlockEndTime] = useState("9:00 AM");
+  const [blockNote, setBlockNote] = useState("NA");
+  const [blockStatus, setBlockStatus] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const rowsPerPage = 10;
 
-const sortedBookings = [...bookings].reverse();
-const totalPages = Math.ceil(sortedBookings.length / rowsPerPage);
-const paginatedBookings = sortedBookings.slice(
-  (currentPage - 1) * rowsPerPage,
-  currentPage * rowsPerPage
-);
-const [adminWeekDate, setAdminWeekDate] = useState(formatDate(new Date()));
+  const currentMonth = new Date().getMonth();
+  const currentYear = new Date().getFullYear();
 
-async function submitManualBlock() {
-  setBlockStatus("Saving manual block...");
+  const monthlyBookings = bookings.filter((booking) => {
+    const bookingDate = new Date(booking.date);
 
-  try {
-    const startDate = new Date(blockStartDate);
-    const endDate = new Date(blockEndDate);
+    const isBlocked =
+      ["NA", "N/A", "Blocked", "Emergency"].includes(
+        String(booking.note || "").trim()
+      );
 
-    const startIndex = allTimeSlots.indexOf(blockStartTime);
-    const endIndex = allTimeSlots.indexOf(blockEndTime);
+    return (
+      bookingDate.getMonth() === currentMonth &&
+      bookingDate.getFullYear() === currentYear &&
+      ["Confirmed"].includes(booking.bookingStatus) &&
+      !isBlocked
+    );
+  });
 
-    for (
-      let current = new Date(startDate);
-      current <= endDate;
-      current.setDate(current.getDate() + 1)
-    ) {
-      const currentDate = formatDate(current);
+  const totalBookingsThisMonth = monthlyBookings.length;
 
-      for (let i = startIndex; i <= endIndex; i++) {
-        const selectedTime = allTimeSlots[i];
+  const totalHoursThisMonth = monthlyBookings.reduce((total, booking) => {
+    return total + Number(booking.duration || 1);
+  }, 0);
 
-        await fetch(GOOGLE_SCRIPT_URL, {
-          method: "POST",
-          mode: "no-cors",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "addManualBlock",
-            date: currentDate,
-            time: selectedTime,
-            note: blockNote || "Manual Block",
-          }),
-        });
+  const estimatedRevenueThisMonth = monthlyBookings.reduce((total, booking) => {
+    return total + Number(booking.coachingFee || 0);
+  }, 0);
+
+
+  const sortedBookings = [...bookings].reverse();
+  const totalPages = Math.ceil(sortedBookings.length / rowsPerPage);
+  const paginatedBookings = sortedBookings.slice(
+    (currentPage - 1) * rowsPerPage,
+    currentPage * rowsPerPage
+  );
+  const [adminWeekDate, setAdminWeekDate] = useState(formatDate(new Date()));
+
+  async function submitManualBlock() {
+    setBlockStatus("Saving manual block...");
+
+    try {
+      const startDate = new Date(blockStartDate);
+      const endDate = new Date(blockEndDate);
+
+      const startIndex = allTimeSlots.indexOf(blockStartTime);
+      const endIndex = allTimeSlots.indexOf(blockEndTime);
+
+      for (
+        let current = new Date(startDate);
+        current <= endDate;
+        current.setDate(current.getDate() + 1)
+      ) {
+        const currentDate = formatDate(current);
+
+        for (let i = startIndex; i <= endIndex; i++) {
+          const selectedTime = allTimeSlots[i];
+
+          await fetch(GOOGLE_SCRIPT_URL, {
+            method: "POST",
+            mode: "no-cors",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "addManualBlock",
+              date: currentDate,
+              time: selectedTime,
+              note: blockNote || "Manual Block",
+            }),
+          });
+        }
       }
+
+      setBlockStatus("Manual block saved.");
+      setTimeout(onRefresh, 1000);
+
+    } catch (error) {
+      console.error(error);
+      setBlockStatus("Failed to save manual block.");
     }
-
-    setBlockStatus("Manual block saved.");
-    setTimeout(onRefresh, 1000);
-
-  } catch (error) {
-    console.error(error);
-    setBlockStatus("Failed to save manual block.");
   }
-}
 
   if (!isLoggedIn) {
     return (
@@ -236,184 +264,207 @@ async function submitManualBlock() {
   }
 
   return (
-  <div className="min-h-screen bg-neutral-950 text-white px-5 py-10">
-    <div className="max-w-6xl mx-auto">
+    <div className="min-h-screen bg-neutral-950 text-white px-5 py-10">
+      <div className="max-w-6xl mx-auto">
 
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-4xl font-bold">Admin Dashboard</h1>
-          <p className="mt-2 text-neutral-400">
-            Manage Coach Ilham booking requests.
-          </p>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-4xl font-bold">Admin Dashboard</h1>
+            <p className="mt-2 text-neutral-400">
+              Manage Coach Ilham booking requests.
+            </p>
+          </div>
+
+          <button
+            onClick={onRefresh}
+            className="rounded-2xl bg-white text-black px-5 py-3 font-semibold"
+          >
+            Refresh
+          </button>
         </div>
 
-        <button
-          onClick={onRefresh}
-          className="rounded-2xl bg-white text-black px-5 py-3 font-semibold"
-        >
-          Refresh
-        </button>
+        <div className="mt-8 grid md:grid-cols-3 gap-4">
+          <div className="rounded-3xl bg-neutral-900 border border-neutral-800 p-6">
+            <p className="text-sm text-neutral-400">Bookings This Month</p>
+            <h2 className="mt-2 text-4xl font-bold text-lime-300">
+              {totalBookingsThisMonth}
+            </h2>
+          </div>
+
+          <div className="rounded-3xl bg-neutral-900 border border-neutral-800 p-6">
+            <p className="text-sm text-neutral-400">Total Coaching Hours</p>
+            <h2 className="mt-2 text-4xl font-bold text-lime-300">
+              {totalHoursThisMonth}
+            </h2>
+          </div>
+
+          <div className="rounded-3xl bg-neutral-900 border border-neutral-800 p-6">
+            <p className="text-sm text-neutral-400">Estimated Revenue</p>
+            <h2 className="mt-2 text-4xl font-bold text-lime-300">
+              RM{estimatedRevenueThisMonth}
+            </h2>
+          </div>
+        </div>
+
+        <div className="mt-8 bg-neutral-900 border border-neutral-800 rounded-3xl p-6">
+          <h2 className="text-2xl font-semibold">Manual Block Slot</h2>
+          <p className="mt-2 text-neutral-400">
+            Block slots by date range and time range.
+          </p>
+
+          <div className="mt-5 grid md:grid-cols-5 gap-4">
+            <input
+              type="date"
+              value={blockStartDate}
+              onChange={(e) => setBlockStartDate(e.target.value)}
+              className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
+            />
+
+            <input
+              type="date"
+              value={blockEndDate}
+              onChange={(e) => setBlockEndDate(e.target.value)}
+              className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
+            />
+
+            <select
+              value={blockStartTime}
+              onChange={(e) => setBlockStartTime(e.target.value)}
+              className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
+            >
+              {allTimeSlots.map((slot) => (
+                <option key={slot}>{slot}</option>
+              ))}
+            </select>
+
+            <select
+              value={blockEndTime}
+              onChange={(e) => setBlockEndTime(e.target.value)}
+              className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
+            >
+              {allTimeSlots.map((slot) => (
+                <option key={slot}>{slot}</option>
+              ))}
+            </select>
+
+            <input
+              value={blockNote}
+              onChange={(e) => setBlockNote(e.target.value)}
+              placeholder="Note e.g. NA / Emergency"
+              className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
+            />
+          </div>
+
+          <button
+            onClick={submitManualBlock}
+            className="mt-4 rounded-2xl bg-lime-400 text-black px-5 py-3 font-semibold"
+          >
+            Block Selected Range
+          </button>
+
+          {blockStatus && (
+            <p className="mt-3 text-sm text-neutral-300">{blockStatus}</p>
+          )}
+        </div>
+
+        <div className="mt-8 flex items-center justify-between">
+          <button
+            onClick={() => {
+              const d = new Date(adminWeekDate);
+              d.setDate(d.getDate() - 7);
+              setAdminWeekDate(formatDate(d));
+            }}
+            className="rounded-2xl bg-neutral-800 px-5 py-3"
+          >
+            ← Previous Week
+          </button>
+
+          <button
+            onClick={() => {
+              const d = new Date(adminWeekDate);
+              d.setDate(d.getDate() + 7);
+              setAdminWeekDate(formatDate(d));
+            }}
+            className="rounded-2xl bg-neutral-800 px-5 py-3"
+          >
+            Next Week →
+          </button>
+        </div>
+
+        <WeeklySchedule
+          bookings={bookings}
+          selectedDate={adminWeekDate}
+          onSelectDate={setAdminWeekDate}
+        />
+
+        <div className="mt-8 overflow-x-auto overflow-y-auto max-h-[600px] rounded-3xl border border-neutral-800">
+          <table className="w-full min-w-[1000px] bg-neutral-900 text-sm">
+            <thead className="bg-neutral-800 text-neutral-300">
+              <tr>
+                <th className="p-4 text-left">Date</th>
+                <th className="p-4 text-left">Time</th>
+                <th className="p-4 text-left">Name</th>
+                <th className="p-4 text-left">Phone</th>
+                <th className="p-4 text-left">Players</th>
+                <th className="p-4 text-left">Duration</th>
+                <th className="p-4 text-left">Location</th>
+                <th className="p-4 text-left">Payment</th>
+                <th className="p-4 text-left">Status</th>
+                <th className="p-4 text-left">Note</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {paginatedBookings.map((booking, index) => (
+                <tr key={index} className="border-t border-neutral-800">
+                  <td className="p-4">{booking.date}</td>
+                  <td className="p-4">{booking.time}</td>
+                  <td className="p-4 font-semibold text-lime-300">
+                    {booking.name}
+                  </td>
+                  <td className="p-4">{booking.phone}</td>
+                  <td className="p-4">{booking.players}</td>
+                  <td className="p-4">{booking.duration}</td>
+                  <td className="p-4">{booking.location}</td>
+                  <td className="p-4">{booking.paymentStatus}</td>
+                  <td className="p-4">{booking.bookingStatus}</td>
+                  <td className="p-4">{booking.note}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="flex items-center justify-between gap-4 bg-neutral-900 border-t border-neutral-800 px-4 py-4">
+          <button
+            onClick={() => setCurrentPage((page) => Math.max(page - 1, 1))}
+            disabled={currentPage === 1}
+            className="rounded-xl bg-neutral-800 px-4 py-2 disabled:opacity-40"
+          >
+            Previous
+          </button>
+
+          <p className="text-sm text-neutral-400">
+            Page {currentPage} of {totalPages || 1}
+          </p>
+
+          <button
+            onClick={() => setCurrentPage((page) => Math.min(page + 1, totalPages))}
+            disabled={currentPage === totalPages || totalPages === 0}
+            className="rounded-xl bg-neutral-800 px-4 py-2 disabled:opacity-40"
+          >
+            Next
+          </button>
+        </div>
+
+
+        <a href="/" className="inline-block mt-6 text-lime-400">
+          ← Back to booking page
+        </a>
+
       </div>
-
-      <div className="mt-8 bg-neutral-900 border border-neutral-800 rounded-3xl p-6">
-  <h2 className="text-2xl font-semibold">Manual Block Slot</h2>
-  <p className="mt-2 text-neutral-400">
-    Block slots by date range and time range.
-  </p>
-
-  <div className="mt-5 grid md:grid-cols-5 gap-4">
-    <input
-      type="date"
-      value={blockStartDate}
-      onChange={(e) => setBlockStartDate(e.target.value)}
-      className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
-    />
-
-    <input
-      type="date"
-      value={blockEndDate}
-      onChange={(e) => setBlockEndDate(e.target.value)}
-      className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
-    />
-
-    <select
-      value={blockStartTime}
-      onChange={(e) => setBlockStartTime(e.target.value)}
-      className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
-    >
-      {allTimeSlots.map((slot) => (
-        <option key={slot}>{slot}</option>
-      ))}
-    </select>
-
-    <select
-      value={blockEndTime}
-      onChange={(e) => setBlockEndTime(e.target.value)}
-      className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
-    >
-      {allTimeSlots.map((slot) => (
-        <option key={slot}>{slot}</option>
-      ))}
-    </select>
-
-    <input
-      value={blockNote}
-      onChange={(e) => setBlockNote(e.target.value)}
-      placeholder="Note e.g. NA / Emergency"
-      className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
-    />
-  </div>
-
-  <button
-    onClick={submitManualBlock}
-    className="mt-4 rounded-2xl bg-lime-400 text-black px-5 py-3 font-semibold"
-  >
-    Block Selected Range
-  </button>
-
-  {blockStatus && (
-    <p className="mt-3 text-sm text-neutral-300">{blockStatus}</p>
-  )}
-</div>
-
-      <div className="mt-8 flex items-center justify-between">
-  <button
-    onClick={() => {
-      const d = new Date(adminWeekDate);
-      d.setDate(d.getDate() - 7);
-      setAdminWeekDate(formatDate(d));
-    }}
-    className="rounded-2xl bg-neutral-800 px-5 py-3"
-  >
-    ← Previous Week
-  </button>
-
-  <button
-    onClick={() => {
-      const d = new Date(adminWeekDate);
-      d.setDate(d.getDate() + 7);
-      setAdminWeekDate(formatDate(d));
-    }}
-    className="rounded-2xl bg-neutral-800 px-5 py-3"
-  >
-    Next Week →
-  </button>
-</div>
-
-<WeeklySchedule
-  bookings={bookings}
-  selectedDate={adminWeekDate}
-  onSelectDate={setAdminWeekDate}
-/>
-
-      <div className="mt-8 overflow-x-auto overflow-y-auto max-h-[600px] rounded-3xl border border-neutral-800">
-        <table className="w-full min-w-[1000px] bg-neutral-900 text-sm">
-          <thead className="bg-neutral-800 text-neutral-300">
-            <tr>
-              <th className="p-4 text-left">Date</th>
-              <th className="p-4 text-left">Time</th>
-              <th className="p-4 text-left">Name</th>
-              <th className="p-4 text-left">Phone</th>
-              <th className="p-4 text-left">Players</th>
-              <th className="p-4 text-left">Duration</th>
-              <th className="p-4 text-left">Location</th>
-              <th className="p-4 text-left">Payment</th>
-              <th className="p-4 text-left">Status</th>
-              <th className="p-4 text-left">Note</th>
-            </tr>
-          </thead>
-
-                   <tbody>
-  {paginatedBookings.map((booking, index) => (
-      <tr key={index} className="border-t border-neutral-800">
-        <td className="p-4">{booking.date}</td>
-        <td className="p-4">{booking.time}</td>
-        <td className="p-4 font-semibold text-lime-300">
-          {booking.name}
-        </td>
-        <td className="p-4">{booking.phone}</td>
-        <td className="p-4">{booking.players}</td>
-        <td className="p-4">{booking.duration}</td>
-        <td className="p-4">{booking.location}</td>
-        <td className="p-4">{booking.paymentStatus}</td>
-        <td className="p-4">{booking.bookingStatus}</td>
-        <td className="p-4">{booking.note}</td>
-      </tr>
-  ))}
-</tbody>
-        </table>
-      </div>
-
-<div className="flex items-center justify-between gap-4 bg-neutral-900 border-t border-neutral-800 px-4 py-4">
-  <button
-    onClick={() => setCurrentPage((page) => Math.max(page - 1, 1))}
-    disabled={currentPage === 1}
-    className="rounded-xl bg-neutral-800 px-4 py-2 disabled:opacity-40"
-  >
-    Previous
-  </button>
-
-  <p className="text-sm text-neutral-400">
-    Page {currentPage} of {totalPages || 1}
-  </p>
-
-  <button
-    onClick={() => setCurrentPage((page) => Math.min(page + 1, totalPages))}
-    disabled={currentPage === totalPages || totalPages === 0}
-    className="rounded-xl bg-neutral-800 px-4 py-2 disabled:opacity-40"
-  >
-    Next
-  </button>
-</div>
-
-
-      <a href="/" className="inline-block mt-6 text-lime-400">
-        ← Back to booking page
-      </a>
-
     </div>
-  </div>
-);
+  );
 }
 
 export default function App() {
@@ -437,24 +488,24 @@ export default function App() {
   const bookedForSelectedDate = useMemo(() => {
     return bookings.filter(
       (booking) =>
-        String(booking.date).slice(0,10) === date &&
-        ["Pending", "Confirmed"].includes(booking.bookingStatus)
+        String(booking.date).slice(0, 10) === date &&
+        ["Confirmed"].includes(booking.bookingStatus)
     );
   }, [bookings, date]);
 
   useEffect(() => {
     const bookedTimes = [];
 
-bookedForSelectedDate.forEach((booking) => {
-  const startIndex = allTimeSlots.indexOf(booking.time);
-  const duration = Number(booking.duration || 1);
+    bookedForSelectedDate.forEach((booking) => {
+      const startIndex = allTimeSlots.indexOf(booking.time);
+      const duration = Number(booking.duration || 1);
 
-  for (let i = 0; i < duration; i++) {
-    if (allTimeSlots[startIndex + i]) {
-      bookedTimes.push(allTimeSlots[startIndex + i]);
-    }
-  }
-});
+      for (let i = 0; i < duration; i++) {
+        if (allTimeSlots[startIndex + i]) {
+          bookedTimes.push(allTimeSlots[startIndex + i]);
+        }
+      }
+    });
     const nextAvailableSlots = allTimeSlots.filter((slot) => !bookedTimes.includes(slot));
     setAvailableSlots(nextAvailableSlots);
 
@@ -500,7 +551,7 @@ bookedForSelectedDate.forEach((booking) => {
       location,
       coachingFee: price,
       paymentStatus: "Unpaid",
-      bookingStatus: "Pending",
+      bookingStatus: "Confirmed",
       note,
     };
 
@@ -519,28 +570,28 @@ bookedForSelectedDate.forEach((booking) => {
         `Hi Coach Ilham, I want to book a tennis coaching slot.
 
 ` +
-          `Name: ${name}
+        `Name: ${name}
 ` +
-          `Phone: ${phone}
+        `Phone: ${phone}
 ` +
-          `Date: ${date}
+        `Date: ${date}
 ` +
-          `Time: ${time}
+        `Time: ${time}
 ` +
-          `Players: ${players}
+        `Players: ${players}
 ` +
-          `Duration: ${duration} hour(s)
+        `Duration: ${duration} hour(s)
 ` +
-          `Location: ${location}
+        `Location: ${location}
 ` +
-          `Coaching Fee: RM${price}
+        `Coaching Fee: RM${price}
 ` +
-          `Payment Status: Unpaid
+        `Payment Status: Unpaid
 ` +
-          `Booking Status: Pending
+        `Booking Status: Pending
 
 ` +
-          `Note: ${note || "-"}`
+        `Note: ${note || "-"}`
       );
 
       setStatus("Booking saved. Opening WhatsApp...");
@@ -566,7 +617,7 @@ bookedForSelectedDate.forEach((booking) => {
     if (!day) return null;
     const dayString = formatDate(day);
     const bookedCount = bookings.filter(
-      (booking) => String(booking.date).slice(0,10) === dayString&& ["Pending", "Confirmed"].includes(booking.bookingStatus)
+      (booking) => String(booking.date).slice(0, 10) === dayString && ["Confirmed"].includes(booking.bookingStatus)
     ).length;
 
     if (bookedCount >= allTimeSlots.length) return "Full";
@@ -575,53 +626,53 @@ bookedForSelectedDate.forEach((booking) => {
   }
 
   if (isAdminPage) {
-  return <AdminDashboard bookings={bookings} onRefresh={loadBookings} />;
-}
+    return <AdminDashboard bookings={bookings} onRefresh={loadBookings} />;
+  }
 
   return (
     <div className="min-h-screen bg-neutral-950 text-white">
       <div className="max-w-6xl mx-auto px-5 py-12">
 
-      <div className="flex justify-end mb-6">
-  <a
-    href="/admin"
-    className="rounded-full border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-lime-400 hover:text-lime-300 transition"
-  >
-    Admin Login
-  </a>
-</div>
+        <div className="flex justify-end mb-6">
+          <a
+            href="/admin"
+            className="rounded-full border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-lime-400 hover:text-lime-300 transition"
+          >
+            Admin Login
+          </a>
+        </div>
 
 
         <div className="grid lg:grid-cols-2 gap-10 items-center">
 
-  <div>
-    <p className="inline-block rounded-full border border-lime-400/40 px-4 py-2 text-sm text-lime-300">
-      ITF Coaching Level 1 • Sport Science Level 1
-    </p>
+          <div>
+            <p className="inline-block rounded-full border border-lime-400/40 px-4 py-2 text-sm text-lime-300">
+              ITF Coaching Level 1 • Sport Science Level 1
+            </p>
 
-    <h1 className="mt-6 text-4xl md:text-6xl font-bold">
-      Train With Coach Ilham
-    </h1>
+            <h1 className="mt-6 text-4xl md:text-6xl font-bold">
+              Train With Coach Ilham
+            </h1>
 
-    <p className="mt-5 text-neutral-300 text-lg">
-      Private tennis coaching built around your level, your pace, and your goals.
-    </p>
+            <p className="mt-5 text-neutral-300 text-lg">
+              Private tennis coaching built around your level, your pace, and your goals.
+            </p>
 
-    <p className="mt-3 text-neutral-400">
-      Based at Nusa Duta Tennis Complex
-    </p>
-  </div>
+            <p className="mt-3 text-neutral-400">
+              Based at Nusa Duta Tennis Complex
+            </p>
+          </div>
 
-  <div className="flex justify-center">
-    <img
-      src={coachImage}
-      alt="Coach Ilham"
-      className="w-full max-w-md rounded-3xl border border-neutral-800 object-cover shadow-2xl"
-    />
-  </div>
+          <div className="flex justify-center">
+            <img
+              src={coachImage}
+              alt="Coach Ilham"
+              className="w-full max-w-md rounded-3xl border border-neutral-800 object-cover shadow-2xl"
+            />
+          </div>
 
-</div>
-         
+        </div>
+
 
         <div className="grid lg:grid-cols-2 gap-8 mt-12">
           <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8">
@@ -658,7 +709,7 @@ bookedForSelectedDate.forEach((booking) => {
 
               <textarea rows="4" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Notes" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
 
-              
+
 
               <button onClick={submitBooking} disabled={loading || availableSlots.length === 0} className="w-full bg-white text-black rounded-2xl py-4 font-semibold hover:bg-neutral-200 transition disabled:opacity-50">
                 {loading ? "Please wait..." : "Book via WhatsApp"}
@@ -686,7 +737,7 @@ bookedForSelectedDate.forEach((booking) => {
                   const dayStatus = getDateStatus(day);
                   const isSelected = dayString === date;
                   const today = new Date();
-                  today.setHours(0,0,0,0);
+                  today.setHours(0, 0, 0, 0);
 
                   const isPast = day && day < today;
 
@@ -695,13 +746,12 @@ bookedForSelectedDate.forEach((booking) => {
                       key={index}
                       disabled={!day || isPast}
                       onClick={() => day && setDate(dayString)}
-                      className={`min-h-20 rounded-2xl border p-2 text-left transition ${
-  isPast
-    ? "opacity-30 cursor-not-allowed border-neutral-900 bg-neutral-950"
-    : isSelected
-    ? "border-lime-400 bg-lime-400 text-black"
-    : "border-neutral-800 bg-neutral-950 hover:border-neutral-600"
-} ${!day ? "opacity-0" : ""}`}
+                      className={`min-h-20 rounded-2xl border p-2 text-left transition ${isPast
+                          ? "opacity-30 cursor-not-allowed border-neutral-900 bg-neutral-950"
+                          : isSelected
+                            ? "border-lime-400 bg-lime-400 text-black"
+                            : "border-neutral-800 bg-neutral-950 hover:border-neutral-600"
+                        } ${!day ? "opacity-0" : ""}`}
                     >
                       {day && (
                         <>
@@ -723,7 +773,7 @@ bookedForSelectedDate.forEach((booking) => {
               onSelectDate={setDate}
             />
 
-            
+
 
             <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8">
               <h2 className="text-2xl font-semibold mb-5">Court Rental</h2>
