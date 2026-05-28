@@ -149,6 +149,16 @@ const [blockStartTime, setBlockStartTime] = useState("8:00 AM");
 const [blockEndTime, setBlockEndTime] = useState("9:00 AM");
 const [blockNote, setBlockNote] = useState("NA");
 const [blockStatus, setBlockStatus] = useState("");
+const [currentPage, setCurrentPage] = useState(1);
+const rowsPerPage = 10;
+
+const sortedBookings = [...bookings].reverse();
+const totalPages = Math.ceil(sortedBookings.length / rowsPerPage);
+const paginatedBookings = sortedBookings.slice(
+  (currentPage - 1) * rowsPerPage,
+  currentPage * rowsPerPage
+);
+const [adminWeekDate, setAdminWeekDate] = useState(formatDate(new Date()));
 
 async function submitManualBlock() {
   setBlockStatus("Saving manual block...");
@@ -306,13 +316,37 @@ async function submitManualBlock() {
   )}
 </div>
 
-      <WeeklySchedule
-        bookings={bookings}
-        selectedDate={formatDate(new Date())}
-        onSelectDate={() => {}}
-      />
+      <div className="mt-8 flex items-center justify-between">
+  <button
+    onClick={() => {
+      const d = new Date(adminWeekDate);
+      d.setDate(d.getDate() - 7);
+      setAdminWeekDate(formatDate(d));
+    }}
+    className="rounded-2xl bg-neutral-800 px-5 py-3"
+  >
+    ← Previous Week
+  </button>
 
-      <div className="mt-8 overflow-x-auto rounded-3xl border border-neutral-800">
+  <button
+    onClick={() => {
+      const d = new Date(adminWeekDate);
+      d.setDate(d.getDate() + 7);
+      setAdminWeekDate(formatDate(d));
+    }}
+    className="rounded-2xl bg-neutral-800 px-5 py-3"
+  >
+    Next Week →
+  </button>
+</div>
+
+<WeeklySchedule
+  bookings={bookings}
+  selectedDate={adminWeekDate}
+  onSelectDate={setAdminWeekDate}
+/>
+
+      <div className="mt-8 overflow-x-auto overflow-y-auto max-h-[600px] rounded-3xl border border-neutral-800">
         <table className="w-full min-w-[1000px] bg-neutral-900 text-sm">
           <thead className="bg-neutral-800 text-neutral-300">
             <tr>
@@ -329,24 +363,49 @@ async function submitManualBlock() {
             </tr>
           </thead>
 
-          <tbody>
-            {bookings.map((booking, index) => (
-              <tr key={index} className="border-t border-neutral-800">
-                <td className="p-4">{booking.date}</td>
-                <td className="p-4">{booking.time}</td>
-                <td className="p-4 font-semibold text-lime-300">{booking.name}</td>
-                <td className="p-4">{booking.phone}</td>
-                <td className="p-4">{booking.players}</td>
-                <td className="p-4">{booking.duration}</td>
-                <td className="p-4">{booking.location}</td>
-                <td className="p-4">{booking.paymentStatus}</td>
-                <td className="p-4">{booking.bookingStatus}</td>
-                <td className="p-4">{booking.note}</td>
-              </tr>
-            ))}
-          </tbody>
+                   <tbody>
+  {paginatedBookings.map((booking, index) => (
+      <tr key={index} className="border-t border-neutral-800">
+        <td className="p-4">{booking.date}</td>
+        <td className="p-4">{booking.time}</td>
+        <td className="p-4 font-semibold text-lime-300">
+          {booking.name}
+        </td>
+        <td className="p-4">{booking.phone}</td>
+        <td className="p-4">{booking.players}</td>
+        <td className="p-4">{booking.duration}</td>
+        <td className="p-4">{booking.location}</td>
+        <td className="p-4">{booking.paymentStatus}</td>
+        <td className="p-4">{booking.bookingStatus}</td>
+        <td className="p-4">{booking.note}</td>
+      </tr>
+  ))}
+</tbody>
         </table>
       </div>
+
+<div className="flex items-center justify-between gap-4 bg-neutral-900 border-t border-neutral-800 px-4 py-4">
+  <button
+    onClick={() => setCurrentPage((page) => Math.max(page - 1, 1))}
+    disabled={currentPage === 1}
+    className="rounded-xl bg-neutral-800 px-4 py-2 disabled:opacity-40"
+  >
+    Previous
+  </button>
+
+  <p className="text-sm text-neutral-400">
+    Page {currentPage} of {totalPages || 1}
+  </p>
+
+  <button
+    onClick={() => setCurrentPage((page) => Math.min(page + 1, totalPages))}
+    disabled={currentPage === totalPages || totalPages === 0}
+    className="rounded-xl bg-neutral-800 px-4 py-2 disabled:opacity-40"
+  >
+    Next
+  </button>
+</div>
+
 
       <a href="/" className="inline-block mt-6 text-lime-400">
         ← Back to booking page
