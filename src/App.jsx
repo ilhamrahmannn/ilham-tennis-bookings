@@ -1,6 +1,7 @@
 import coachImage from "./assets/ilham.jpg";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { addDoc, collection, deleteDoc, doc, getDoc, onSnapshot, serverTimestamp, updateDoc } from "firebase/firestore";
+import { Bell } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { auth, db } from "./firebase";
 
@@ -12,9 +13,24 @@ const roles = {
 
 
 
-const rates = {
-  1: { 1: 120, 2: 240 },
-  2: { 1: 150, 2: 300 },
+const hourlyRates = {
+  1: 120,
+  2: 150,
+  3: 180,
+  4: 200,
+};
+
+const packageOptions = {
+  four_sessions: {
+    label: "4 Sessions Package RM450",
+    totalSessions: 4,
+    paymentAmount: 450,
+  },
+  eight_sessions: {
+    label: "8 Sessions Package RM800",
+    totalSessions: 8,
+    paymentAmount: 800,
+  },
 };
 
 const allTimeSlots = [
@@ -59,7 +75,6 @@ function getMonthDays(currentDate) {
   return days;
 }
 
-const revenuePerHour = 100;
 const unavailableTextPattern =
   /\b(n\/a|blocked?|emergency|not available|unavailable|manual block)\b/i;
 const noteNaPattern = /(^|[^a-z0-9])n\s*\/?\s*a([^a-z0-9]|$)/i;
@@ -101,6 +116,55 @@ function isReservedBooking(booking) {
 function getBookingDuration(booking) {
   const duration = Number(booking.duration || 1);
   return Number.isFinite(duration) && duration > 0 ? duration : 1;
+}
+
+function getBookingSlotCount(booking) {
+  return Math.ceil(getBookingDuration(booking));
+}
+
+function getHourlyRate(players) {
+  return hourlyRates[Number(players)] || hourlyRates[1];
+}
+
+function calculateCoachingFee(players, duration) {
+  return getHourlyRate(players) * getBookingDuration({ duration });
+}
+
+function normalizeStudentName(name) {
+  return String(name || "").trim().toLowerCase();
+}
+
+function getPackageOption(packageType) {
+  return packageOptions[packageType] || packageOptions.four_sessions;
+}
+
+function getPackageRemainingSessions(packageRecord) {
+  const total = Number(packageRecord?.totalSessions || 0);
+  const used = Number(packageRecord?.usedSessions || 0);
+  return Math.max(0, total - used);
+}
+
+function findActivePackage(packages, studentName) {
+  const normalizedName = normalizeStudentName(studentName);
+  if (!normalizedName) return null;
+
+  return packages.find((packageRecord) => {
+    return (
+      normalizeStudentName(packageRecord.studentName) === normalizedName &&
+      getPackageRemainingSessions(packageRecord) > 0 &&
+      String(packageRecord.status || "active") === "active"
+    );
+  }) || null;
+}
+
+function getBookingRevenue(booking) {
+  const storedFee = Number(booking.coachingFee);
+
+  if (Number.isFinite(storedFee) && storedFee > 0) {
+    return storedFee;
+  }
+
+  return calculateCoachingFee(booking.players, booking.duration);
 }
 
 function getPeriodRange(period, referenceDate = new Date()) {
@@ -149,7 +213,7 @@ function getExpandedBookingSlots(bookings, range, bookingFilter) {
     const startIndex = allTimeSlots.indexOf(String(booking.time || "").trim());
     if (startIndex === -1) return;
 
-    const duration = getBookingDuration(booking);
+    const duration = getBookingSlotCount(booking);
 
     for (let i = 0; i < duration; i++) {
       const time = allTimeSlots[startIndex + i];
@@ -182,7 +246,7 @@ function getRequestedSlotKeys(date, time, duration) {
   const startIndex = allTimeSlots.indexOf(String(time || "").trim());
   if (startIndex === -1) return [];
 
-  return Array.from({ length: getBookingDuration({ duration }) }, (_, index) => {
+  return Array.from({ length: getBookingSlotCount({ duration }) }, (_, index) => {
     const slot = allTimeSlots[startIndex + index];
     return slot ? `${date}-${slot}` : null;
   }).filter(Boolean);
@@ -190,7 +254,7 @@ function getRequestedSlotKeys(date, time, duration) {
 
 function hasBookingOverlap(bookings, date, time, duration) {
   const requestedSlotKeys = getRequestedSlotKeys(date, time, duration);
-  if (requestedSlotKeys.length !== getBookingDuration({ duration })) return true;
+  if (requestedSlotKeys.length !== getBookingSlotCount({ duration })) return true;
 
   const dayRange = {
     start: parseBookingDate(date),
@@ -210,14 +274,19 @@ function hasBookingOverlap(bookings, date, time, duration) {
 function getBookingStats(bookings, period, referenceDate) {
   const range = getPeriodRange(period, referenceDate);
   const validSlots = getExpandedValidBookingSlots(bookings, range);
-  const validBookingIndexes = new Set(
-    validSlots.map((slot) => slot.bookingIndex)
+  const validBookingsByIndex = new Map(
+    validSlots.map((slot) => [slot.bookingIndex, slot.booking])
   );
+  const validBookings = Array.from(validBookingsByIndex.values());
 
   return {
-    totalBookings: validBookingIndexes.size,
-    totalHours: validSlots.length,
-    estimatedRevenue: validSlots.length * revenuePerHour,
+    totalBookings: validBookings.length,
+    totalHours: validBookings.reduce((total, booking) => {
+      return total + getBookingDuration(booking);
+    }, 0),
+    estimatedRevenue: validBookings.reduce((total, booking) => {
+      return total + getBookingRevenue(booking);
+    }, 0),
   };
 }
 
@@ -269,6 +338,32 @@ function canViewBookingForAdmin(booking, user, userProfile, selectedCoach) {
 
 function getBookingCoachLabel(booking) {
   return booking.coachName || booking.coachEmail || "Unknown coach";
+}
+
+function cleanTableValue(value) {
+  const text = String(value || "").trim();
+  return text.toLowerCase() === "#error!" ? "" : text;
+}
+
+function shouldSendBookingNotification(booking) {
+  const name = String(booking.name || "").trim().toLowerCase();
+  const type = String(booking.type || booking.bookingType || "").trim().toLowerCase();
+
+  return !(
+    name === "blocked" ||
+    type === "blocked" ||
+    (Number(booking.players) === 0 && Number(booking.duration) === 0)
+  );
+}
+
+function formatNotificationDate(createdAt) {
+  const date = createdAt?.toDate ? createdAt.toDate() : null;
+  if (!date) return "";
+
+  return date.toLocaleString("en-MY", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 }
 
 function getAdminLoginEmail(loginName) {
@@ -521,7 +616,266 @@ function WeeklySchedule({
   );
 }
 
-function AdminDashboard({ bookings, onRefresh, user, userProfile, authLoading }) {
+function PackageTracker({ packages, canEdit }) {
+  const [editingPackageId, setEditingPackageId] = useState("");
+  const [editPackage, setEditPackage] = useState({});
+
+  function startEditPackage(packageRecord) {
+    setEditingPackageId(packageRecord.id);
+    setEditPackage({
+      studentName: packageRecord.studentName || "",
+      usedSessions: packageRecord.usedSessions ?? 0,
+      paymentStatus: packageRecord.paymentStatus || "Unpaid",
+      packageStartDate: packageRecord.packageStartDate || "",
+    });
+  }
+
+  async function savePackage(packageRecord) {
+    const totalSessions = Number(packageRecord.totalSessions || 0);
+    const usedSessions = Number(editPackage.usedSessions || 0);
+
+    await updateDoc(doc(db, "packages", packageRecord.id), {
+      studentName: editPackage.studentName,
+      usedSessions,
+      remainingSessions: Math.max(0, totalSessions - usedSessions),
+      paymentStatus: editPackage.paymentStatus,
+      packageStartDate: editPackage.packageStartDate,
+      updatedAt: serverTimestamp(),
+    });
+
+    setEditingPackageId("");
+    setEditPackage({});
+  }
+
+  async function markPackagePaid(packageRecord) {
+    await updateDoc(doc(db, "packages", packageRecord.id), {
+      paymentStatus: "Paid",
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  async function deletePackage(packageRecord) {
+    if (!window.confirm(`Delete package for ${packageRecord.studentName}?`)) return;
+    await deleteDoc(doc(db, "packages", packageRecord.id));
+  }
+
+  return (
+    <div className="mt-8 bg-neutral-900 border border-neutral-800 rounded-3xl p-6">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-semibold">Package Tracker</h2>
+          <p className="mt-2 text-neutral-400">
+            Track student packages, payments, and remaining sessions.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-5 overflow-x-auto">
+        <table className="w-full min-w-[1000px] text-sm">
+          <thead className="text-neutral-400">
+            <tr>
+              <th className="p-3 text-left">Student</th>
+              <th className="p-3 text-left">Package</th>
+              <th className="p-3 text-left">Start Date</th>
+              <th className="p-3 text-left">Used / Total</th>
+              <th className="p-3 text-left">Remaining</th>
+              <th className="p-3 text-left">Payment</th>
+              <th className="p-3 text-left">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {packages.map((packageRecord) => {
+              const isEditing = editingPackageId === packageRecord.id;
+              const remaining = getPackageRemainingSessions(packageRecord);
+
+              return (
+                <tr key={packageRecord.id} className="border-t border-neutral-800">
+                  <td className="p-3">
+                    {isEditing ? (
+                      <input
+                        value={editPackage.studentName}
+                        onChange={(e) => setEditPackage((current) => ({ ...current, studentName: e.target.value }))}
+                        className="w-full rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2"
+                      />
+                    ) : (
+                      packageRecord.studentName
+                    )}
+                  </td>
+                  <td className="p-3">{packageRecord.packageLabel || getPackageOption(packageRecord.packageType).label}</td>
+                  <td className="p-3">
+                    {isEditing ? (
+                      <input
+                        type="date"
+                        value={editPackage.packageStartDate}
+                        onChange={(e) => setEditPackage((current) => ({ ...current, packageStartDate: e.target.value }))}
+                        className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2"
+                      />
+                    ) : (
+                      packageRecord.packageStartDate
+                    )}
+                  </td>
+                  <td className="p-3">
+                    {isEditing ? (
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        value={editPackage.usedSessions}
+                        onChange={(e) => setEditPackage((current) => ({ ...current, usedSessions: e.target.value }))}
+                        className="w-24 rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2"
+                      />
+                    ) : (
+                      `${packageRecord.usedSessions || 0} / ${packageRecord.totalSessions}`
+                    )}
+                  </td>
+                  <td className="p-3 text-lime-300">{remaining}</td>
+                  <td className="p-3">
+                    {isEditing ? (
+                      <select
+                        value={editPackage.paymentStatus}
+                        onChange={(e) => setEditPackage((current) => ({ ...current, paymentStatus: e.target.value }))}
+                        className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2"
+                      >
+                        <option>Unpaid</option>
+                        <option>Paid</option>
+                        <option>Partial</option>
+                      </select>
+                    ) : (
+                      `${packageRecord.paymentStatus || "Unpaid"} · RM${packageRecord.paymentAmount || 0}`
+                    )}
+                  </td>
+                  <td className="p-3">
+                    {canEdit ? (
+                      <div className="flex flex-wrap gap-2">
+                        {isEditing ? (
+                          <>
+                            <button onClick={() => savePackage(packageRecord)} className="rounded-xl bg-lime-400 px-3 py-2 text-black">Save</button>
+                            <button onClick={() => setEditingPackageId("")} className="rounded-xl bg-neutral-800 px-3 py-2">Cancel</button>
+                          </>
+                        ) : (
+                          <>
+                            <button onClick={() => startEditPackage(packageRecord)} className="rounded-xl bg-neutral-800 px-3 py-2">Edit</button>
+                            <button onClick={() => markPackagePaid(packageRecord)} className="rounded-xl bg-lime-400 px-3 py-2 text-black">Mark paid</button>
+                            <button onClick={() => deletePackage(packageRecord)} className="rounded-xl bg-red-500/80 px-3 py-2 text-white">Delete</button>
+                          </>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-neutral-500">Read only</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+
+        {packages.length === 0 && (
+          <p className="p-4 text-sm text-neutral-400">No active packages yet.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function NotificationCenter({ notifications }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const unreadNotifications = notifications.filter((notification) => !notification.isRead);
+  const latestNotifications = notifications.slice(0, 10);
+
+  async function markNotificationRead(notification) {
+    await updateDoc(doc(db, "notifications", notification.id), {
+      isRead: true,
+      readAt: serverTimestamp(),
+    });
+  }
+
+  async function markAllNotificationsRead() {
+    await Promise.all(
+      unreadNotifications.map((notification) =>
+        updateDoc(doc(db, "notifications", notification.id), {
+          isRead: true,
+          readAt: serverTimestamp(),
+        })
+      )
+    );
+  }
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setIsOpen((current) => !current)}
+        className="relative rounded-2xl bg-neutral-800 px-4 py-3 hover:bg-neutral-700"
+        aria-label="Open notifications"
+      >
+        <Bell size={18} />
+        {unreadNotifications.length > 0 && (
+          <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-lime-400 px-1.5 py-0.5 text-xs font-bold text-black">
+            {unreadNotifications.length}
+          </span>
+        )}
+      </button>
+
+      {isOpen && (
+        <div className="absolute right-0 z-20 mt-3 w-[min(420px,calc(100vw-2rem))] rounded-2xl border border-neutral-800 bg-neutral-950 p-4 shadow-2xl">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold">Notifications</h2>
+            <button
+              type="button"
+              onClick={markAllNotificationsRead}
+              disabled={unreadNotifications.length === 0}
+              className="rounded-xl bg-neutral-800 px-3 py-2 text-xs disabled:opacity-40"
+            >
+              Mark all as read
+            </button>
+          </div>
+
+          <div className="mt-4 max-h-96 space-y-3 overflow-y-auto">
+            {latestNotifications.map((notification) => (
+              <div
+                key={notification.id}
+                className={`rounded-2xl border p-4 ${notification.isRead ? "border-neutral-800 bg-neutral-900" : "border-lime-400/50 bg-lime-400/10"}`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="font-semibold text-white">{notification.title || "New Booking"}</h3>
+                    <p className="mt-1 text-sm text-neutral-300">{notification.message}</p>
+                  </div>
+                  {!notification.isRead && (
+                    <button
+                      type="button"
+                      onClick={() => markNotificationRead(notification)}
+                      className="shrink-0 rounded-xl bg-lime-400 px-3 py-1.5 text-xs text-black"
+                    >
+                      Mark as read
+                    </button>
+                  )}
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-neutral-400">
+                  <div>Name: {notification.name || "-"}</div>
+                  <div>Phone: {cleanTableValue(notification.phone) || "-"}</div>
+                  <div>Date: {notification.date || "-"}</div>
+                  <div>Time: {notification.time || "-"}</div>
+                  <div>Duration: {notification.duration || "-"} hour(s)</div>
+                  <div>{formatNotificationDate(notification.createdAt)}</div>
+                </div>
+              </div>
+            ))}
+
+            {latestNotifications.length === 0 && (
+              <p className="rounded-2xl bg-neutral-900 p-4 text-sm text-neutral-400">
+                No notifications yet.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdminDashboard({ bookings, packages, notifications, onRefresh, user, userProfile, authLoading }) {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginStatus, setLoginStatus] = useState("");
@@ -534,6 +888,8 @@ function AdminDashboard({ bookings, onRefresh, user, userProfile, authLoading })
   const [blockNote, setBlockNote] = useState("NA");
   const [blockStatus, setBlockStatus] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [bookingSearchQuery, setBookingSearchQuery] = useState("");
+  const [bookingSort, setBookingSort] = useState({ key: "date", direction: "desc" });
   const [adminWeekDate, setAdminWeekDate] = useState(formatDate(new Date()));
   const rowsPerPage = 10;
   const userRole = getUserRole(userProfile);
@@ -544,6 +900,11 @@ function AdminDashboard({ bookings, onRefresh, user, userProfile, authLoading })
       canViewBookingForAdmin(booking, user, userProfile, selectedCoach)
     );
   }, [bookings, selectedCoach, user, userProfile]);
+  const visiblePackages = useMemo(() => {
+    return packages.filter((packageRecord) =>
+      canViewBookingForAdmin(packageRecord, user, userProfile, selectedCoach)
+    );
+  }, [packages, selectedCoach, user, userProfile]);
   const coachOptions = useMemo(() => {
     const coaches = new Map();
 
@@ -569,12 +930,94 @@ function AdminDashboard({ bookings, onRefresh, user, userProfile, authLoading })
   };
 
 
-  const sortedBookings = [...visibleBookings].reverse();
+  const clientBookings = useMemo(() => {
+    return visibleBookings.filter((booking) => {
+      const name = String(booking.name || "").trim().toLowerCase();
+      const payment = String(booking.paymentStatus || booking.payment || "").trim().toLowerCase();
+      const note = String(booking.note || "").trim().toLowerCase();
+      const type = String(booking.type || booking.bookingType || "").trim().toLowerCase();
+      const status = String(booking.status || booking.bookingStatus || "").trim().toLowerCase();
+
+      const isBlocked =
+        name === "blocked" ||
+        type === "blocked" ||
+        status === "blocked" ||
+        (Number(booking.players) === 0 && Number(booking.duration) === 0) ||
+        ((payment === "n/a" || note === "n/a") && (name === "blocked" || type === "blocked"));
+
+      return !isBlocked;
+    });
+  }, [visibleBookings]);
+  const filteredBookings = useMemo(() => {
+    const query = bookingSearchQuery.toLowerCase().trim();
+
+    return clientBookings.filter((booking) => {
+      const name = String(booking.name || "").toLowerCase();
+      const phone = cleanTableValue(booking.phone).toLowerCase();
+
+      return !query || name.includes(query) || phone.includes(query);
+    });
+  }, [clientBookings, bookingSearchQuery]);
+  function getSortValue(booking, key) {
+    if (key === "phone") return cleanTableValue(booking.phone).toLowerCase();
+    if (["players", "duration"].includes(key)) return Number(booking[key] || 0);
+    return String(booking[key] || "").toLowerCase();
+  }
+
+  function updateBookingSort(key) {
+    setBookingSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
+    }));
+    setCurrentPage(1);
+  }
+
+  const sortedBookings = [...filteredBookings].sort((a, b) => {
+    const aValue = getSortValue(a, bookingSort.key);
+    const bValue = getSortValue(b, bookingSort.key);
+    const direction = bookingSort.direction === "asc" ? 1 : -1;
+
+    if (aValue > bValue) return direction;
+    if (aValue < bValue) return -direction;
+    return 0;
+  });
   const totalPages = Math.ceil(sortedBookings.length / rowsPerPage);
   const paginatedBookings = sortedBookings.slice(
     (currentPage - 1) * rowsPerPage,
     currentPage * rowsPerPage
   );
+  const tableColumns = [
+    ["date", "Date"],
+    ["time", "Time"],
+    ["name", "Name"],
+    ["phone", "Phone"],
+    ["players", "Players"],
+    ["duration", "Duration"],
+    ["location", "Location"],
+    ["paymentStatus", "Payment"],
+    ["bookingStatus", "Status"],
+    ["note", "Note"],
+  ];
+
+  function renderSortableHeader(key, label) {
+    const isActive = bookingSort.key === key;
+    const directionLabel = bookingSort.direction === "asc" ? "A-Z" : "Z-A";
+
+    return (
+      <th key={key} className="p-4 text-left">
+        <button
+          type="button"
+          onClick={() => updateBookingSort(key)}
+          className="flex items-center gap-2 text-left font-semibold hover:text-lime-300"
+        >
+          <span>{label}</span>
+          <span className="text-[10px] text-neutral-500">
+            {isActive ? directionLabel : "Sort"}
+          </span>
+        </button>
+      </th>
+    );
+  }
 
   async function saveWeeklyScheduleCell({ date, time, booking, value }) {
     if (!canEdit) {
@@ -605,6 +1048,24 @@ function AdminDashboard({ bookings, onRefresh, user, userProfile, authLoading })
     }
 
     const isBlocked = containsUnavailableText(text);
+    const packageRecord = !booking?.id && !isBlocked
+      ? findActivePackage(visiblePackages, text)
+      : null;
+    let packageDeductedSessions = 0;
+
+    if (packageRecord) {
+      const totalSessions = Number(packageRecord.totalSessions || 0);
+      const usedSessions = Number(packageRecord.usedSessions || 0);
+      packageDeductedSessions = Math.min(1, Math.max(0, totalSessions - usedSessions));
+      const nextUsedSessions = Math.min(totalSessions, usedSessions + packageDeductedSessions);
+
+      await updateDoc(doc(db, "packages", packageRecord.id), {
+        usedSessions: nextUsedSessions,
+        remainingSessions: Math.max(0, totalSessions - nextUsedSessions),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
     const scheduleData = {
       name: isBlocked ? "Blocked" : text,
       phone: booking?.phone || "",
@@ -618,6 +1079,10 @@ function AdminDashboard({ bookings, onRefresh, user, userProfile, authLoading })
       bookingStatus: "Confirmed",
       note: isBlocked ? text : "",
       type: isBlocked ? "blocked" : "booking",
+      paymentType: packageRecord ? "package" : booking?.paymentType || "pay_per_session",
+      packageId: packageRecord?.id || booking?.packageId || "",
+      packageType: packageRecord?.packageType || booking?.packageType || "",
+      packageDeductedSessions: packageDeductedSessions || booking?.packageDeductedSessions || 0,
       createdBy: booking?.createdBy || user?.uid || "",
       coachName: booking?.coachName || getCoachName(user, userProfile),
       coachEmail: booking?.coachEmail || getCoachEmail(user, userProfile),
@@ -788,6 +1253,8 @@ function AdminDashboard({ bookings, onRefresh, user, userProfile, authLoading })
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-3">
+            <NotificationCenter notifications={notifications} />
+
             {isSuperAdmin && (
               <select
                 value={selectedCoach}
@@ -929,6 +1396,8 @@ function AdminDashboard({ bookings, onRefresh, user, userProfile, authLoading })
           </div>
         )}
 
+        <PackageTracker packages={visiblePackages} canEdit={canEdit} />
+
         <div className="mt-8 flex items-center justify-between">
           <button
             onClick={() => {
@@ -961,20 +1430,31 @@ function AdminDashboard({ bookings, onRefresh, user, userProfile, authLoading })
           onSaveCell={saveWeeklyScheduleCell}
         />
 
-        <div className="mt-8 overflow-x-auto overflow-y-auto max-h-[600px] rounded-3xl border border-neutral-800">
+        <div className="mt-8 bg-neutral-900 border border-neutral-800 rounded-3xl p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-2xl font-semibold">Client Bookings</h2>
+              <p className="mt-1 text-sm text-neutral-400">
+                Showing real client bookings only.
+              </p>
+            </div>
+            <input
+              value={bookingSearchQuery}
+              onChange={(e) => {
+                setBookingSearchQuery(e.target.value);
+                setCurrentPage(1);
+              }}
+              placeholder="Search name or phone"
+              className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400 md:max-w-sm"
+            />
+          </div>
+        </div>
+
+        <div className="mt-4 overflow-x-auto overflow-y-auto max-h-[600px] rounded-3xl border border-neutral-800">
           <table className="w-full min-w-[1000px] bg-neutral-900 text-sm">
             <thead className="bg-neutral-800 text-neutral-300">
               <tr>
-                <th className="p-4 text-left">Date</th>
-                <th className="p-4 text-left">Time</th>
-                <th className="p-4 text-left">Name</th>
-                <th className="p-4 text-left">Phone</th>
-                <th className="p-4 text-left">Players</th>
-                <th className="p-4 text-left">Duration</th>
-                <th className="p-4 text-left">Location</th>
-                <th className="p-4 text-left">Payment</th>
-                <th className="p-4 text-left">Status</th>
-                <th className="p-4 text-left">Note</th>
+                {tableColumns.map(([key, label]) => renderSortableHeader(key, label))}
               </tr>
             </thead>
 
@@ -986,7 +1466,7 @@ function AdminDashboard({ bookings, onRefresh, user, userProfile, authLoading })
                   <td className="p-4 font-semibold text-lime-300">
                     {booking.name}
                   </td>
-                  <td className="p-4">{booking.phone}</td>
+                  <td className="p-4">{cleanTableValue(booking.phone) || "-"}</td>
                   <td className="p-4">{booking.players}</td>
                   <td className="p-4">{booking.duration}</td>
                   <td className="p-4">{booking.location}</td>
@@ -1040,8 +1520,13 @@ export default function App() {
   const [date, setDate] = useState(formatDate(new Date()));
   const [time, setTime] = useState("8:00 AM");
   const [location, setLocation] = useState("Tennis Nusa Duta");
+  const [paymentType, setPaymentType] = useState("pay_per_session");
+  const [selectedPackageType, setSelectedPackageType] = useState("four_sessions");
+  const [packageStartDate, setPackageStartDate] = useState(formatDate(new Date()));
   const [note, setNote] = useState("");
   const [bookings, setBookings] = useState([]);
+  const [packages, setPackages] = useState([]);
+  const [notifications, setNotifications] = useState([]);
   const [adminUser, setAdminUser] = useState(null);
   const [adminProfile, setAdminProfile] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -1049,7 +1534,7 @@ export default function App() {
   const [status, setStatus] = useState("");
   const [calendarMonth, setCalendarMonth] = useState(new Date());
 
-  const price = useMemo(() => rates[players][duration], [players, duration]);
+  const price = useMemo(() => calculateCoachingFee(players, duration), [players, duration]);
 
   const reservedForSelectedDate = useMemo(() => {
     const dayRange = {
@@ -1069,6 +1554,9 @@ export default function App() {
     );
   }, [bookings, date, duration]);
   const selectedBookingTime = availableSlots.includes(time) ? time : availableSlots[0] || "";
+  const activePackage = useMemo(() => {
+    return findActivePackage(packages, name);
+  }, [packages, name]);
 
   function refreshBookings() {
     setStatus("Bookings update automatically from Firebase.");
@@ -1132,6 +1620,55 @@ export default function App() {
     return unsubscribe;
   }, []);
 
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "packages"),
+      (snapshot) => {
+        const nextPackages = snapshot.docs.map((packageDoc) => ({
+          id: packageDoc.id,
+          ...packageDoc.data(),
+        }));
+
+        nextPackages.sort((a, b) => {
+          return String(a.studentName || "").localeCompare(String(b.studentName || ""));
+        });
+
+        setPackages(nextPackages);
+      },
+      (error) => {
+        console.error(error);
+        setStatus("Could not load Firebase packages. Please check Firestore rules.");
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "notifications"),
+      (snapshot) => {
+        const nextNotifications = snapshot.docs.map((notificationDoc) => ({
+          id: notificationDoc.id,
+          ...notificationDoc.data(),
+        }));
+
+        nextNotifications.sort((a, b) => {
+          const aTime = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+          const bTime = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+          return bTime - aTime;
+        });
+
+        setNotifications(nextNotifications);
+      },
+      (error) => {
+        console.error(error);
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+
   async function submitBooking() {
     if (!name || !phone || !date || !selectedBookingTime) {
       setStatus("Please fill in name, phone, date and time.");
@@ -1143,6 +1680,11 @@ export default function App() {
       return;
     }
 
+    const packageOption = getPackageOption(selectedPackageType);
+    let packageRecord = activePackage;
+    let packageRef = null;
+    let packageDeductedSessions = 0;
+
     const bookingData = {
       name,
       phone,
@@ -1152,10 +1694,11 @@ export default function App() {
       duration,
       location,
       coachingFee: price,
-      paymentStatus: "Unpaid",
+      paymentStatus: paymentType === "package" ? "Package" : "Unpaid",
       bookingStatus: "Confirmed",
       note,
       type: "booking",
+      paymentType,
       createdBy: "",
       coachName: "Coach Ilham",
       coachEmail: "",
@@ -1168,7 +1711,86 @@ export default function App() {
     setStatus("Saving booking...");
 
     try {
-      await addDoc(collection(db, "bookings"), bookingData);
+      if (paymentType === "package") {
+        packageRef = await addDoc(collection(db, "packages"), {
+          studentName: name,
+          packageType: selectedPackageType,
+          packageLabel: packageOption.label,
+          totalSessions: packageOption.totalSessions,
+          usedSessions: 0,
+          remainingSessions: packageOption.totalSessions,
+          packageStartDate,
+          paymentAmount: packageOption.paymentAmount,
+          paymentStatus: "Unpaid",
+          status: "active",
+          createdBy: "",
+          coachName: "Coach Ilham",
+          coachEmail: "",
+          role: "public",
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+
+        packageRecord = {
+          id: packageRef.id,
+          totalSessions: packageOption.totalSessions,
+          usedSessions: 0,
+          remainingSessions: packageOption.totalSessions,
+        };
+      }
+
+      if (packageRecord) {
+        const packageDocRef = packageRef || doc(db, "packages", packageRecord.id);
+        const usedSessions = Number(packageRecord.usedSessions || 0);
+        const totalSessions = Number(packageRecord.totalSessions || 0);
+        packageDeductedSessions = Math.min(getBookingDuration({ duration }), Math.max(0, totalSessions - usedSessions));
+        const nextUsedSessions = Math.min(totalSessions, usedSessions + packageDeductedSessions);
+
+        await updateDoc(packageDocRef, {
+          usedSessions: nextUsedSessions,
+          remainingSessions: Math.max(0, totalSessions - nextUsedSessions),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      const bookingRef = await addDoc(collection(db, "bookings"), {
+        ...bookingData,
+        packageId: packageRecord?.id || "",
+        packageType: packageRecord ? (paymentType === "package" ? selectedPackageType : packageRecord.packageType || "") : "",
+        packageDeductedSessions,
+      });
+
+      if (shouldSendBookingNotification(bookingData)) {
+        const notificationPayload = {
+          name,
+          phone,
+          date,
+          time: selectedBookingTime,
+          players,
+          duration,
+          location,
+          paymentStatus: bookingData.paymentStatus,
+          note,
+        };
+
+        await addDoc(collection(db, "notifications"), {
+          type: "new_booking",
+          title: "New Booking",
+          message: `${name} booked ${date} at ${selectedBookingTime}`,
+          ...notificationPayload,
+          bookingId: bookingRef.id,
+          isRead: false,
+          createdAt: serverTimestamp(),
+        });
+
+        fetch("/api/send-booking-notification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(notificationPayload),
+        }).catch((error) => {
+          console.error("Booking notification delivery failed", error);
+        });
+      }
 
       const whatsappMessage = encodeURIComponent(
         `Hi Coach Ilham, I want to book a tennis coaching slot.
@@ -1204,6 +1826,7 @@ export default function App() {
       setName("");
       setPhone("");
       setNote("");
+      setPaymentType("pay_per_session");
     } catch (error) {
       console.error(error);
       setStatus("Booking failed. Please WhatsApp Coach Ilham directly.");
@@ -1234,6 +1857,8 @@ export default function App() {
     return (
       <AdminDashboard
         bookings={bookings}
+        packages={packages}
+        notifications={notifications}
         onRefresh={refreshBookings}
         user={adminUser}
         userProfile={adminProfile}
@@ -1314,16 +1939,52 @@ export default function App() {
                 <select value={players} onChange={(e) => setPlayers(Number(e.target.value))} className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
                   <option value={1}>1 Player</option>
                   <option value={2}>2 Players</option>
+                  <option value={3}>3 Players</option>
+                  <option value={4}>4 Players</option>
                 </select>
-                <select value={duration} onChange={(e) => setDuration(Number(e.target.value))} className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
-                  <option value={1}>1 Hour</option>
-                  <option value={2}>2 Hours</option>
-                </select>
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="0.5"
+                    step="0.5"
+                    value={duration}
+                    onChange={(e) => setDuration(Number(e.target.value) || 1)}
+                    placeholder="1 hour"
+                    className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 pr-20 outline-none focus:border-lime-400"
+                  />
+                  <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-sm text-neutral-400">
+                    hours
+                  </span>
+                </div>
               </div>
 
               <textarea rows="4" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Notes" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
 
+              <select value={paymentType} onChange={(e) => setPaymentType(e.target.value)} className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
+                <option value="pay_per_session">Pay Per Session</option>
+                <option value="package">Package</option>
+              </select>
 
+              {paymentType === "package" && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <select value={selectedPackageType} onChange={(e) => setSelectedPackageType(e.target.value)} className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
+                    <option value="four_sessions">4 Sessions Package RM450</option>
+                    <option value="eight_sessions">8 Sessions Package RM800</option>
+                  </select>
+                  <input
+                    type="date"
+                    value={packageStartDate}
+                    onChange={(e) => setPackageStartDate(e.target.value)}
+                    className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400"
+                  />
+                </div>
+              )}
+
+              {activePackage && (
+                <p className="text-sm text-lime-300">
+                  {activePackage.studentName} Package: {activePackage.usedSessions || 0}/{activePackage.totalSessions} used, {getPackageRemainingSessions(activePackage)} remaining
+                </p>
+              )}
 
               <button onClick={submitBooking} disabled={loading || availableSlots.length === 0} className="w-full bg-white text-black rounded-2xl py-4 font-semibold hover:bg-neutral-200 transition disabled:opacity-50">
                 {loading ? "Please wait..." : "Book Now"}
