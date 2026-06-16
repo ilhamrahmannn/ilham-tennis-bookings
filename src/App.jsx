@@ -1,14 +1,14 @@
 import coachImage from "./assets/ilham.jpg";
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { addDoc, collection, deleteDoc, doc, getDoc, onSnapshot, serverTimestamp, updateDoc } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
+import { auth, db } from "./firebase";
 
-
-
-
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzGYhVxmTWBevznTwPJhPybl-mXjnkUn0pBHQSIgHhtYcNnIEYAjfFMxgR2C-MM0NVaZQ/exec";
-
-
-
-const ADMIN_PASSWORD = "coachilham123";
+const roles = {
+  SUPER_ADMIN: "super_admin",
+  COACH: "coach",
+  VIEWER: "viewer",
+};
 
 
 
@@ -58,43 +58,343 @@ function getMonthDays(currentDate) {
 
   return days;
 }
-function WeeklySchedule({ bookings, selectedDate, onSelectDate }) {
-  const start = new Date(selectedDate);
-  const day = start.getDay();
-  const mondayOffset = day === 0 ? -6 : 1 - day;
-  start.setDate(start.getDate() + mondayOffset);
 
-  const weekDays = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
-    return d;
+const revenuePerHour = 100;
+const unavailableTextPattern =
+  /\b(n\/a|blocked?|emergency|not available|unavailable|manual block)\b/i;
+const noteNaPattern = /(^|[^a-z0-9])n\s*\/?\s*a([^a-z0-9]|$)/i;
+
+function parseBookingDate(date) {
+  if (date instanceof Date) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  }
+
+  const dateString = String(date || "").slice(0, 10);
+  return dateString ? new Date(`${dateString}T00:00:00`) : null;
+}
+
+function containsUnavailableText(value) {
+  const text = String(value || "").trim();
+  return unavailableTextPattern.test(text) || noteNaPattern.test(text);
+}
+
+function isValidCoachingBooking(booking) {
+  const fieldsToCheck = [
+    booking.name,
+    booking.note,
+    booking.type,
+    booking.status,
+    booking.bookingType,
+  ];
+
+  return (
+    String(booking.bookingStatus || "").trim() === "Confirmed" &&
+    String(booking.type || "booking").trim() !== "blocked" &&
+    !fieldsToCheck.some(containsUnavailableText)
+  );
+}
+
+function isReservedBooking(booking) {
+  return String(booking.bookingStatus || "").trim() === "Confirmed";
+}
+
+function getBookingDuration(booking) {
+  const duration = Number(booking.duration || 1);
+  return Number.isFinite(duration) && duration > 0 ? duration : 1;
+}
+
+function getPeriodRange(period, referenceDate = new Date()) {
+  const reference = parseBookingDate(referenceDate) || new Date();
+  const start = new Date(
+    reference.getFullYear(),
+    reference.getMonth(),
+    reference.getDate()
+  );
+  const end = new Date(start);
+
+  if (period === "week") {
+    const day = start.getDay();
+    const mondayOffset = day === 0 ? -6 : 1 - day;
+    start.setDate(start.getDate() + mondayOffset);
+    end.setTime(start.getTime());
+    end.setDate(start.getDate() + 7);
+  }
+
+  if (period === "month") {
+    start.setDate(1);
+    end.setTime(start.getTime());
+    end.setMonth(start.getMonth() + 1, 1);
+  }
+
+  if (period === "year") {
+    start.setMonth(0, 1);
+    end.setTime(start.getTime());
+    end.setFullYear(start.getFullYear() + 1, 0, 1);
+  }
+
+  return { start, end };
+}
+
+function getExpandedBookingSlots(bookings, range, bookingFilter) {
+  const slotsByCell = new Map();
+
+  bookings.forEach((booking, bookingIndex) => {
+    if (!bookingFilter(booking)) return;
+
+    const bookingDate = parseBookingDate(booking.date);
+    if (!bookingDate) return;
+    if (range && (bookingDate < range.start || bookingDate >= range.end)) return;
+
+    const dateString = formatDate(bookingDate);
+    const startIndex = allTimeSlots.indexOf(String(booking.time || "").trim());
+    if (startIndex === -1) return;
+
+    const duration = getBookingDuration(booking);
+
+    for (let i = 0; i < duration; i++) {
+      const time = allTimeSlots[startIndex + i];
+      if (!time) continue;
+
+      const slotKey = `${dateString}-${time}`;
+      if (!slotsByCell.has(slotKey)) {
+        slotsByCell.set(slotKey, {
+          booking,
+          bookingIndex,
+          date: dateString,
+          time,
+        });
+      }
+    }
   });
+
+  return Array.from(slotsByCell.values());
+}
+
+function getExpandedValidBookingSlots(bookings, range) {
+  return getExpandedBookingSlots(bookings, range, isValidCoachingBooking);
+}
+
+function getExpandedReservedSlots(bookings, range) {
+  return getExpandedBookingSlots(bookings, range, isReservedBooking);
+}
+
+function getRequestedSlotKeys(date, time, duration) {
+  const startIndex = allTimeSlots.indexOf(String(time || "").trim());
+  if (startIndex === -1) return [];
+
+  return Array.from({ length: getBookingDuration({ duration }) }, (_, index) => {
+    const slot = allTimeSlots[startIndex + index];
+    return slot ? `${date}-${slot}` : null;
+  }).filter(Boolean);
+}
+
+function hasBookingOverlap(bookings, date, time, duration) {
+  const requestedSlotKeys = getRequestedSlotKeys(date, time, duration);
+  if (requestedSlotKeys.length !== getBookingDuration({ duration })) return true;
+
+  const dayRange = {
+    start: parseBookingDate(date),
+    end: parseBookingDate(date),
+  };
+  dayRange.end.setDate(dayRange.end.getDate() + 1);
+
+  const reservedSlotKeys = new Set(
+    getExpandedReservedSlots(bookings, dayRange).map(
+      (slot) => `${slot.date}-${slot.time}`
+    )
+  );
+
+  return requestedSlotKeys.some((slotKey) => reservedSlotKeys.has(slotKey));
+}
+
+function getBookingStats(bookings, period, referenceDate) {
+  const range = getPeriodRange(period, referenceDate);
+  const validSlots = getExpandedValidBookingSlots(bookings, range);
+  const validBookingIndexes = new Set(
+    validSlots.map((slot) => slot.bookingIndex)
+  );
+
+  return {
+    totalBookings: validBookingIndexes.size,
+    totalHours: validSlots.length,
+    estimatedRevenue: validSlots.length * revenuePerHour,
+  };
+}
+
+function formatStatsDate(date) {
+  return date.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function formatStatsMonth(date) {
+  return date.toLocaleDateString("en-GB", {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function getScheduleCellText(booking) {
+  if (!booking) return "";
+  return booking.name || booking.note || "Booked";
+}
+
+function getUserRole(userProfile) {
+  return userProfile?.role || roles.VIEWER;
+}
+
+function getCoachName(user, userProfile) {
+  return userProfile?.coachName || user?.displayName || user?.email || "Coach";
+}
+
+function getCoachEmail(user, userProfile) {
+  return userProfile?.coachEmail || user?.email || "";
+}
+
+function canEditAdminData(userProfile) {
+  return [roles.SUPER_ADMIN, roles.COACH].includes(getUserRole(userProfile));
+}
+
+function canViewBookingForAdmin(booking, user, userProfile, selectedCoach) {
+  const role = getUserRole(userProfile);
+
+  if (role === roles.SUPER_ADMIN) {
+    return selectedCoach === "all" || booking.createdBy === selectedCoach;
+  }
+
+  return Boolean(user?.uid) && booking.createdBy === user.uid;
+}
+
+function getBookingCoachLabel(booking) {
+  return booking.coachName || booking.coachEmail || "Unknown coach";
+}
+
+function getAdminLoginEmail(loginName) {
+  const value = String(loginName || "").trim();
+  if (value.includes("@")) return value;
+  return `${value.toLowerCase()}@ilham-booking.local`;
+}
+
+function getDefaultAdminProfile(user) {
+  const email = String(user?.email || "").toLowerCase();
+  const username = email.split("@")[0] || "coach";
+
+  if (email === "ilham@ilham-booking.local") {
+    return {
+      role: roles.SUPER_ADMIN,
+      coachName: "ILHAM",
+      coachEmail: email,
+    };
+  }
+
+  if (email === "zayn@ilham-booking.local") {
+    return {
+      role: roles.COACH,
+      coachName: "zayn",
+      coachEmail: email,
+    };
+  }
+
+  if (email === "khalis@ilham-booking.local") {
+    return {
+      role: roles.COACH,
+      coachName: "khalis",
+      coachEmail: email,
+    };
+  }
+
+  return {
+    role: roles.VIEWER,
+    coachName: user?.displayName || username,
+    coachEmail: email,
+  };
+}
+
+function WeeklySchedule({
+  bookings,
+  selectedDate,
+  onSelectDate,
+  className = "mt-8",
+  contentClassName = "",
+  editable = false,
+  onSaveCell,
+}) {
+  const [editingCell, setEditingCell] = useState(null);
+  const [editValue, setEditValue] = useState("");
+  const [savingCellKey, setSavingCellKey] = useState("");
+
+  const { weekDays, slotBookingsByKey } = useMemo(() => {
+    const weekRange = getPeriodRange("week", selectedDate);
+    const expandedSlots = editable
+      ? getExpandedReservedSlots(bookings, weekRange)
+      : getExpandedValidBookingSlots(bookings, weekRange);
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(weekRange.start);
+      d.setDate(weekRange.start.getDate() + i);
+      return d;
+    });
+
+    return {
+      weekDays: days,
+      slotBookingsByKey: new Map(
+        expandedSlots.map((slot) => [`${slot.date}-${slot.time}`, slot.booking])
+      ),
+    };
+  }, [bookings, selectedDate, editable]);
 
   function getBooking(date, time) {
     const dateString = formatDate(date);
+    return slotBookingsByKey.get(`${dateString}-${time}`);
+  }
 
-    return bookings.find(
-      (booking) =>
-        booking.date === dateString &&
-        (() => {
-          const startIndex = allTimeSlots.indexOf(booking.time);
-          const currentIndex = allTimeSlots.indexOf(time);
-          const duration = Number(booking.duration || 1);
+  function getCellKey(dateString, time) {
+    return `${dateString}-${time}`;
+  }
 
-          return (
-            currentIndex >= startIndex &&
-            currentIndex < startIndex + duration
-          );
-        })() &&
-        ["Confirmed"].includes(booking.bookingStatus)
+  function startEditing(dateString, time, booking) {
+    if (!editable) return;
+
+    onSelectDate(dateString);
+    setEditingCell({ date: dateString, time, booking });
+    setEditValue(getScheduleCellText(booking));
+  }
+
+  function cancelEditing() {
+    setEditingCell(null);
+    setEditValue("");
+  }
+
+  async function saveCell(cell = editingCell, value = editValue) {
+    if (!editable || !cell || !onSaveCell) return;
+
+    const cellKey = getCellKey(cell.date, cell.time);
+    setSavingCellKey(cellKey);
+
+    try {
+      await onSaveCell({ ...cell, value });
+    } catch (error) {
+      console.error(error);
+      alert("Failed to save schedule cell.");
+    } finally {
+      setSavingCellKey("");
+      cancelEditing();
+    }
+  }
+
+  function isEditingCell(dateString, time) {
+    return (
+      editingCell?.date === dateString &&
+      editingCell?.time === time
     );
   }
 
   return (
-    <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8 mt-8">
+    <div className={`bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8 ${className}`}>
       <h2 className="text-2xl font-semibold mb-6">Weekly Schedule</h2>
 
-     <div className="overflow-x-auto max-w-full">
+     <div className={`overflow-auto max-w-full ${contentClassName}`}>
         <div className="min-w-[900px]">
           <div className="grid grid-cols-8 bg-purple-400/70 text-black rounded-t-2xl overflow-hidden">
             <div className="p-3 font-semibold">Time</div>
@@ -124,24 +424,92 @@ function WeeklySchedule({ bookings, selectedDate, onSelectDate }) {
               </div>
 
               {weekDays.map((day) => {
+                const dateString = formatDate(day);
                 const booking = getBooking(day, slot);
+                const cellKey = getCellKey(dateString, slot);
+                const isPastSlot = isPastTimeSlot(dateString, slot);
+                const shouldDimPast = isPastSlot && !editable;
+                const isEditing = isEditingCell(dateString, slot);
+                const isSaving = savingCellKey === cellKey;
+                const cellText = getScheduleCellText(booking);
+                const cellClassName = `relative min-h-14 p-3 text-left text-sm border-r border-neutral-800 transition ${shouldDimPast
+                  ? "opacity-30 cursor-not-allowed text-neutral-600 bg-neutral-950"
+                  : booking
+                  ? "text-black bg-lime-400 font-semibold"
+                  : "text-neutral-500 hover:bg-neutral-800"
+                }`;
 
-                const isPastSlot = isPastTimeSlot(formatDate(day), slot);
+                if (editable && isEditing) {
+                  return (
+                    <div key={`${dateString}-${slot}`} className={cellClassName}>
+                      <input
+                        autoFocus
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        onBlur={() => saveCell()}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            e.currentTarget.blur();
+                          }
+
+                          if (e.key === "Escape") {
+                            e.preventDefault();
+                            cancelEditing();
+                          }
+                        }}
+                        className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-1 text-sm text-white outline-none focus:border-lime-300"
+                      />
+                    </div>
+                  );
+                }
+
+                if (editable) {
+                  return (
+                    <div
+                      key={`${dateString}-${slot}`}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => startEditing(dateString, slot, booking)}
+                      onDoubleClick={() => startEditing(dateString, slot, booking)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        if (booking) saveCell({ date: dateString, time: slot, booking }, "");
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          startEditing(dateString, slot, booking);
+                        }
+                      }}
+                      className={`${cellClassName} cursor-text`}
+                    >
+                      <span>{isSaving ? "Saving..." : cellText}</span>
+                      {booking && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            saveCell({ date: dateString, time: slot, booking }, "");
+                          }}
+                          className="absolute right-1 top-1 rounded-full bg-black/20 px-1.5 py-0.5 text-xs text-black hover:bg-black/30"
+                          aria-label="Clear schedule cell"
+                        >
+                          x
+                        </button>
+                      )}
+                    </div>
+                  );
+                }
 
                 return (
                   <button
-                    key={`${formatDate(day)}-${slot}`}
+                    key={`${dateString}-${slot}`}
                     onClick={() => {
-                      onSelectDate(formatDate(day));
+                      onSelectDate(dateString);
                     }}
-                    className={`min-h-14 p-3 text-left text-sm border-r border-neutral-800 transition ${isPastSlot
-  ? "opacity-30 cursor-not-allowed text-neutral-600 bg-neutral-950"
-  : booking
-  ? "text-black bg-lime-400 font-semibold"
-  : "text-neutral-500 hover:bg-neutral-800"
-                      }`}
+                    className={cellClassName}
                   >
-                    {isPastSlot ? "" : booking ? booking.name || booking.note || "Booked" : ""}
+                    {shouldDimPast ? "" : cellText}
                   </button>
                 );
               })}
@@ -153,9 +521,11 @@ function WeeklySchedule({ bookings, selectedDate, onSelectDate }) {
   );
 }
 
-function AdminDashboard({ bookings, onRefresh }) {
-  const [password, setPassword] = useState("");
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+function AdminDashboard({ bookings, onRefresh, user, userProfile, authLoading }) {
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginStatus, setLoginStatus] = useState("");
+  const [selectedCoach, setSelectedCoach] = useState("all");
 
   const [blockStartDate, setBlockStartDate] = useState(formatDate(new Date()));
   const [blockEndDate, setBlockEndDate] = useState(formatDate(new Date()));
@@ -164,47 +534,114 @@ function AdminDashboard({ bookings, onRefresh }) {
   const [blockNote, setBlockNote] = useState("NA");
   const [blockStatus, setBlockStatus] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [adminWeekDate, setAdminWeekDate] = useState(formatDate(new Date()));
   const rowsPerPage = 10;
-
-  const currentMonth = new Date().getMonth();
-  const currentYear = new Date().getFullYear();
-
-  const monthlyBookings = bookings.filter((booking) => {
-    const bookingDate = new Date(booking.date);
-
-    const isBlocked =
-      ["NA", "N/A", "Blocked", "Emergency"].includes(
-        String(booking.note || "").trim()
-      );
-
-    return (
-      bookingDate.getMonth() === currentMonth &&
-      bookingDate.getFullYear() === currentYear &&
-      ["Confirmed"].includes(booking.bookingStatus) &&
-      !isBlocked
+  const userRole = getUserRole(userProfile);
+  const canEdit = canEditAdminData(userProfile);
+  const isSuperAdmin = userRole === roles.SUPER_ADMIN;
+  const visibleBookings = useMemo(() => {
+    return bookings.filter((booking) =>
+      canViewBookingForAdmin(booking, user, userProfile, selectedCoach)
     );
-  });
+  }, [bookings, selectedCoach, user, userProfile]);
+  const coachOptions = useMemo(() => {
+    const coaches = new Map();
 
-  const totalBookingsThisMonth = monthlyBookings.length;
+    bookings.forEach((booking) => {
+      if (!booking.createdBy) return;
+      coaches.set(booking.createdBy, getBookingCoachLabel(booking));
+    });
 
-  const totalHoursThisMonth = monthlyBookings.reduce((total, booking) => {
-    return total + Number(booking.duration || 1);
-  }, 0);
+    return Array.from(coaches.entries()).map(([uid, label]) => ({ uid, label }));
+  }, [bookings]);
 
-  const estimatedRevenueThisMonth = monthlyBookings.reduce((total, booking) => {
-    return total + Number(booking.coachingFee || 0);
-  }, 0);
+  const adminWeekRange = getPeriodRange("week", adminWeekDate);
+  const adminWeekEndDate = new Date(adminWeekRange.end);
+  adminWeekEndDate.setDate(adminWeekEndDate.getDate() - 1);
+  const adminWeekRangeLabel = `${formatStatsDate(adminWeekRange.start)} - ${formatStatsDate(adminWeekEndDate)}`;
+  const adminMonthRange = getPeriodRange("month", adminWeekDate);
+  const adminMonthLabel = formatStatsMonth(adminMonthRange.start);
+
+  const bookingStats = {
+    week: getBookingStats(visibleBookings, "week", adminWeekDate),
+    month: getBookingStats(visibleBookings, "month", adminWeekDate),
+    year: getBookingStats(visibleBookings, "year"),
+  };
 
 
-  const sortedBookings = [...bookings].reverse();
+  const sortedBookings = [...visibleBookings].reverse();
   const totalPages = Math.ceil(sortedBookings.length / rowsPerPage);
   const paginatedBookings = sortedBookings.slice(
     (currentPage - 1) * rowsPerPage,
     currentPage * rowsPerPage
   );
-  const [adminWeekDate, setAdminWeekDate] = useState(formatDate(new Date()));
+
+  async function saveWeeklyScheduleCell({ date, time, booking, value }) {
+    if (!canEdit) {
+      alert("Your account is read-only.");
+      return;
+    }
+
+    if (
+      userRole !== roles.SUPER_ADMIN &&
+      booking?.createdBy &&
+      booking.createdBy !== user?.uid
+    ) {
+      alert("You can only edit your own bookings.");
+      return;
+    }
+
+    const text = String(value || "").trim();
+
+    if (booking?.id && !text) {
+      await deleteDoc(doc(db, "bookings", booking.id));
+      return;
+    }
+
+    if (!text) return;
+    if (!booking?.id && hasBookingOverlap(bookings, date, time, 1)) {
+      alert("That slot is already reserved.");
+      return;
+    }
+
+    const isBlocked = containsUnavailableText(text);
+    const scheduleData = {
+      name: isBlocked ? "Blocked" : text,
+      phone: booking?.phone || "",
+      date,
+      time,
+      players: Number(booking?.players || 1),
+      duration: 1,
+      location: booking?.location || "Tennis Nusa Duta",
+      coachingFee: Number(booking?.coachingFee || 0),
+      paymentStatus: booking?.paymentStatus || (isBlocked ? "N/A" : "Unpaid"),
+      bookingStatus: "Confirmed",
+      note: isBlocked ? text : "",
+      type: isBlocked ? "blocked" : "booking",
+      createdBy: booking?.createdBy || user?.uid || "",
+      coachName: booking?.coachName || getCoachName(user, userProfile),
+      coachEmail: booking?.coachEmail || getCoachEmail(user, userProfile),
+      role: userRole,
+      updatedAt: serverTimestamp(),
+    };
+
+    if (booking?.id) {
+      await updateDoc(doc(db, "bookings", booking.id), scheduleData);
+      return;
+    }
+
+    await addDoc(collection(db, "bookings"), {
+      ...scheduleData,
+      createdAt: serverTimestamp(),
+    });
+  }
 
   async function submitManualBlock() {
+    if (!canEdit) {
+      setBlockStatus("Your account is read-only.");
+      return;
+    }
+
     setBlockStatus("Saving manual block...");
 
     try {
@@ -224,22 +661,34 @@ function AdminDashboard({ bookings, onRefresh }) {
         for (let i = startIndex; i <= endIndex; i++) {
           const selectedTime = allTimeSlots[i];
 
-          await fetch(GOOGLE_SCRIPT_URL, {
-            method: "POST",
-            mode: "no-cors",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              action: "addManualBlock",
-              date: currentDate,
-              time: selectedTime,
-              note: blockNote || "Manual Block",
-            }),
+          if (!selectedTime) continue;
+          if (hasBookingOverlap(bookings, currentDate, selectedTime, 1)) continue;
+
+          await addDoc(collection(db, "bookings"), {
+            name: "Blocked",
+            phone: "",
+            date: currentDate,
+            time: selectedTime,
+            players: 0,
+            duration: 1,
+            location: "",
+            coachingFee: 0,
+            paymentStatus: "",
+            bookingStatus: "Confirmed",
+            note: blockNote || "NA",
+            type: "blocked",
+            createdBy: user?.uid || "",
+            coachName: getCoachName(user, userProfile),
+            coachEmail: getCoachEmail(user, userProfile),
+            role: userRole,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
           });
         }
       }
 
       setBlockStatus("Manual block saved.");
-      setTimeout(onRefresh, 1000);
+      onRefresh();
 
     } catch (error) {
       console.error(error);
@@ -247,33 +696,80 @@ function AdminDashboard({ bookings, onRefresh }) {
     }
   }
 
-  if (!isLoggedIn) {
+  async function loginAdmin() {
+    setLoginStatus("Signing in...");
+
+    try {
+      await signInWithEmailAndPassword(
+        auth,
+        getAdminLoginEmail(loginEmail),
+        loginPassword
+      );
+      setLoginStatus("");
+    } catch (error) {
+      console.error(error);
+      const internalEmail = getAdminLoginEmail(loginEmail);
+
+      if (error.code === "auth/user-not-found" || error.code === "auth/invalid-credential") {
+        setLoginStatus(`Login failed. Create Firebase Auth user first: ${internalEmail}`);
+      } else if (error.code === "auth/wrong-password") {
+        setLoginStatus("Login failed. Wrong password.");
+      } else if (
+        error.code === "auth/operation-not-allowed" ||
+        error.code === "auth/configuration-not-found"
+      ) {
+        setLoginStatus("Login failed. Enable Firebase Authentication and Email/Password sign-in.");
+      } else {
+        setLoginStatus(`Login failed: ${error.message}`);
+      }
+    }
+  }
+
+  async function logoutAdmin() {
+    await signOut(auth);
+  }
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-neutral-950 text-white flex items-center justify-center px-5">
+        <p className="text-neutral-300">Checking admin access...</p>
+      </div>
+    );
+  }
+
+  if (!user) {
     return (
       <div className="min-h-screen bg-neutral-950 text-white flex items-center justify-center px-5">
         <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl p-8">
           <h1 className="text-3xl font-bold">Coach Admin Login</h1>
-          <p className="mt-2 text-neutral-400">Enter admin password to view bookings.</p>
+          <p className="mt-2 text-neutral-400">Sign in with your admin username.</p>
 
           <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Admin password"
+            type="text"
+            value={loginEmail}
+            onChange={(e) => setLoginEmail(e.target.value)}
+            placeholder="Username"
             className="mt-6 w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400"
           />
 
+          <input
+            type="password"
+            value={loginPassword}
+            onChange={(e) => setLoginPassword(e.target.value)}
+            placeholder="Password"
+            className="mt-4 w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400"
+          />
+
           <button
-            onClick={() => {
-              if (password === ADMIN_PASSWORD) {
-                setIsLoggedIn(true);
-              } else {
-                alert("Wrong password");
-              }
-            }}
+            onClick={loginAdmin}
             className="mt-4 w-full bg-lime-400 text-black rounded-2xl py-4 font-semibold"
           >
             Login
           </button>
+
+          {loginStatus && (
+            <p className="mt-3 text-sm text-neutral-300">{loginStatus}</p>
+          )}
         </div>
       </div>
     );
@@ -287,101 +783,151 @@ function AdminDashboard({ bookings, onRefresh }) {
           <div>
             <h1 className="text-4xl font-bold">Admin Dashboard</h1>
             <p className="mt-2 text-neutral-400">
-              Manage Coach Ilham booking requests.
+              {getCoachName(user, userProfile)} · {userRole}
             </p>
           </div>
 
-          <button
-            onClick={onRefresh}
-            className="rounded-2xl bg-white text-black px-5 py-3 font-semibold"
-          >
-            Refresh
-          </button>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            {isSuperAdmin && (
+              <select
+                value={selectedCoach}
+                onChange={(e) => {
+                  setSelectedCoach(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="rounded-2xl bg-neutral-900 border border-neutral-700 px-4 py-3 text-sm"
+              >
+                <option value="all">All coaches</option>
+                {coachOptions.map((coach) => (
+                  <option key={coach.uid} value={coach.uid}>
+                    {coach.label}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            <button
+              onClick={onRefresh}
+              className="rounded-2xl bg-white text-black px-5 py-3 font-semibold"
+            >
+              Refresh
+            </button>
+
+            <button
+              onClick={logoutAdmin}
+              className="rounded-2xl bg-neutral-800 px-5 py-3 font-semibold"
+            >
+              Logout
+            </button>
+          </div>
         </div>
 
         <div className="mt-8 grid md:grid-cols-3 gap-4">
-          <div className="rounded-3xl bg-neutral-900 border border-neutral-800 p-6">
-            <p className="text-sm text-neutral-400">Bookings This Month</p>
-            <h2 className="mt-2 text-4xl font-bold text-lime-300">
-              {totalBookingsThisMonth}
-            </h2>
-          </div>
-
-          <div className="rounded-3xl bg-neutral-900 border border-neutral-800 p-6">
-            <p className="text-sm text-neutral-400">Total Coaching Hours</p>
-            <h2 className="mt-2 text-4xl font-bold text-lime-300">
-              {totalHoursThisMonth}
-            </h2>
-          </div>
-
-          <div className="rounded-3xl bg-neutral-900 border border-neutral-800 p-6">
-            <p className="text-sm text-neutral-400">Estimated Revenue</p>
-            <h2 className="mt-2 text-4xl font-bold text-lime-300">
-              RM{estimatedRevenueThisMonth}
-            </h2>
-          </div>
+          {[
+            ["This Week", bookingStats.week, adminWeekRangeLabel],
+            ["This Month", bookingStats.month, adminMonthLabel],
+            ["This Year", bookingStats.year],
+          ].map(([label, stats, rangeLabel]) => (
+            <div key={label} className="rounded-3xl bg-neutral-900 border border-neutral-800 p-6">
+              <p className="text-sm text-neutral-400">{label}</p>
+              {rangeLabel && (
+                <p className="mt-1 text-sm font-semibold text-neutral-200">
+                  {rangeLabel}
+                </p>
+              )}
+              <div className="mt-4 space-y-4">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-neutral-500">Valid Bookings</p>
+                  <h2 className="mt-1 text-3xl font-bold text-lime-300">
+                    {stats.totalBookings}
+                  </h2>
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-neutral-500">Coaching Hours</p>
+                  <h2 className="mt-1 text-3xl font-bold text-lime-300">
+                    {stats.totalHours}
+                  </h2>
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-neutral-500">Estimated Revenue</p>
+                  <h2 className="mt-1 text-3xl font-bold text-lime-300">
+                    RM{stats.estimatedRevenue}
+                  </h2>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
 
-        <div className="mt-8 bg-neutral-900 border border-neutral-800 rounded-3xl p-6">
-          <h2 className="text-2xl font-semibold">Manual Block Slot</h2>
-          <p className="mt-2 text-neutral-400">
-            Block slots by date range and time range.
-          </p>
+        {canEdit ? (
+          <div className="mt-8 bg-neutral-900 border border-neutral-800 rounded-3xl p-6">
+            <h2 className="text-2xl font-semibold">Manual Block Slot</h2>
+            <p className="mt-2 text-neutral-400">
+              Block slots by date range and time range.
+            </p>
 
-          <div className="mt-5 grid md:grid-cols-5 gap-4">
-            <input
-              type="date"
-              value={blockStartDate}
-              onChange={(e) => setBlockStartDate(e.target.value)}
-              className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
-            />
+            <div className="mt-5 grid md:grid-cols-5 gap-4">
+              <input
+                type="date"
+                value={blockStartDate}
+                onChange={(e) => setBlockStartDate(e.target.value)}
+                className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
+              />
 
-            <input
-              type="date"
-              value={blockEndDate}
-              onChange={(e) => setBlockEndDate(e.target.value)}
-              className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
-            />
+              <input
+                type="date"
+                value={blockEndDate}
+                onChange={(e) => setBlockEndDate(e.target.value)}
+                className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
+              />
 
-            <select
-              value={blockStartTime}
-              onChange={(e) => setBlockStartTime(e.target.value)}
-              className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
+              <select
+                value={blockStartTime}
+                onChange={(e) => setBlockStartTime(e.target.value)}
+                className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
+              >
+                {allTimeSlots.map((slot) => (
+                  <option key={slot}>{slot}</option>
+                ))}
+              </select>
+
+              <select
+                value={blockEndTime}
+                onChange={(e) => setBlockEndTime(e.target.value)}
+                className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
+              >
+                {allTimeSlots.map((slot) => (
+                  <option key={slot}>{slot}</option>
+                ))}
+              </select>
+
+              <input
+                value={blockNote}
+                onChange={(e) => setBlockNote(e.target.value)}
+                placeholder="Note e.g. NA / Emergency"
+                className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
+              />
+            </div>
+
+            <button
+              onClick={submitManualBlock}
+              className="mt-4 rounded-2xl bg-lime-400 text-black px-5 py-3 font-semibold"
             >
-              {allTimeSlots.map((slot) => (
-                <option key={slot}>{slot}</option>
-              ))}
-            </select>
+              Block Selected Range
+            </button>
 
-            <select
-              value={blockEndTime}
-              onChange={(e) => setBlockEndTime(e.target.value)}
-              className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
-            >
-              {allTimeSlots.map((slot) => (
-                <option key={slot}>{slot}</option>
-              ))}
-            </select>
-
-            <input
-              value={blockNote}
-              onChange={(e) => setBlockNote(e.target.value)}
-              placeholder="Note e.g. NA / Emergency"
-              className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
-            />
+            {blockStatus && (
+              <p className="mt-3 text-sm text-neutral-300">{blockStatus}</p>
+            )}
           </div>
-
-          <button
-            onClick={submitManualBlock}
-            className="mt-4 rounded-2xl bg-lime-400 text-black px-5 py-3 font-semibold"
-          >
-            Block Selected Range
-          </button>
-
-          {blockStatus && (
-            <p className="mt-3 text-sm text-neutral-300">{blockStatus}</p>
-          )}
-        </div>
+        ) : (
+          <div className="mt-8 bg-neutral-900 border border-neutral-800 rounded-3xl p-6">
+            <h2 className="text-2xl font-semibold">Read-only Access</h2>
+            <p className="mt-2 text-neutral-400">
+              Viewer accounts can view schedules and statistics only.
+            </p>
+          </div>
+        )}
 
         <div className="mt-8 flex items-center justify-between">
           <button
@@ -408,9 +954,11 @@ function AdminDashboard({ bookings, onRefresh }) {
         </div>
 
         <WeeklySchedule
-          bookings={bookings}
+          bookings={visibleBookings}
           selectedDate={adminWeekDate}
           onSelectDate={setAdminWeekDate}
+          editable={canEdit}
+          onSaveCell={saveWeeklyScheduleCell}
         />
 
         <div className="mt-8 overflow-x-auto overflow-y-auto max-h-[600px] rounded-3xl border border-neutral-800">
@@ -494,68 +1042,104 @@ export default function App() {
   const [location, setLocation] = useState("Tennis Nusa Duta");
   const [note, setNote] = useState("");
   const [bookings, setBookings] = useState([]);
-  const [availableSlots, setAvailableSlots] = useState(allTimeSlots);
+  const [adminUser, setAdminUser] = useState(null);
+  const [adminProfile, setAdminProfile] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
   const [calendarMonth, setCalendarMonth] = useState(new Date());
 
   const price = useMemo(() => rates[players][duration], [players, duration]);
 
-  const bookedForSelectedDate = useMemo(() => {
-    return bookings.filter(
-      (booking) =>
-        String(booking.date).slice(0, 10) === date &&
-        ["Confirmed"].includes(booking.bookingStatus)
-    );
+  const reservedForSelectedDate = useMemo(() => {
+    const dayRange = {
+      start: parseBookingDate(date),
+      end: parseBookingDate(date),
+    };
+    dayRange.end.setDate(dayRange.end.getDate() + 1);
+
+    return getExpandedReservedSlots(bookings, dayRange);
   }, [bookings, date]);
 
-  useEffect(() => {
-    const bookedTimes = [];
+  const availableSlots = useMemo(() => {
+    return allTimeSlots.filter(
+      (slot) =>
+        !isPastTimeSlot(date, slot) &&
+        !hasBookingOverlap(bookings, date, slot, duration)
+    );
+  }, [bookings, date, duration]);
+  const selectedBookingTime = availableSlots.includes(time) ? time : availableSlots[0] || "";
 
-    bookedForSelectedDate.forEach((booking) => {
-      const startIndex = allTimeSlots.indexOf(booking.time);
-      const duration = Number(booking.duration || 1);
-
-      for (let i = 0; i < duration; i++) {
-        if (allTimeSlots[startIndex + i]) {
-          bookedTimes.push(allTimeSlots[startIndex + i]);
-        }
-      }
-    });
-    const nextAvailableSlots = allTimeSlots.filter(
-  (slot) => !bookedTimes.includes(slot) && !isPastTimeSlot(date, slot)
-);
-    setAvailableSlots(nextAvailableSlots);
-
-    if (!nextAvailableSlots.includes(time)) {
-      setTime(nextAvailableSlots[0] || "");
-    }
-  }, [bookedForSelectedDate, time]);
-
-  async function loadBookings() {
-    setLoading(true);
-    setStatus("Checking latest slots...");
-
-    try {
-      const response = await fetch(`${GOOGLE_SCRIPT_URL}?action=getBookings`);
-      const data = await response.json();
-      setBookings(data.bookings || []);
-      setStatus("");
-    } catch (error) {
-      console.error(error);
-      setStatus("Could not load Google Sheet bookings. Please check Apps Script deployment.");
-    } finally {
-      setLoading(false);
-    }
+  function refreshBookings() {
+    setStatus("Bookings update automatically from Firebase.");
   }
 
   useEffect(() => {
-    loadBookings();
+    const unsubscribe = onAuthStateChanged(auth, async (nextUser) => {
+      setAdminUser(nextUser);
+
+      if (!nextUser) {
+        setAdminProfile(null);
+        setAuthLoading(false);
+        return;
+      }
+
+      try {
+        const defaultProfile = getDefaultAdminProfile(nextUser);
+        const userSnapshot = await getDoc(doc(db, "users", nextUser.uid));
+        const profile = userSnapshot.exists() ? userSnapshot.data() : {};
+
+        setAdminProfile({
+          role: profile.role || defaultProfile.role,
+          coachName: profile.coachName || defaultProfile.coachName,
+          coachEmail: profile.coachEmail || defaultProfile.coachEmail,
+        });
+      } catch (error) {
+        console.error(error);
+        setAdminProfile(getDefaultAdminProfile(nextUser));
+      } finally {
+        setAuthLoading(false);
+      }
+    });
+
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "bookings"),
+      (snapshot) => {
+        const nextBookings = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        }));
+
+        nextBookings.sort((a, b) => {
+          const dateCompare = String(a.date || "").localeCompare(String(b.date || ""));
+          if (dateCompare !== 0) return dateCompare;
+          return allTimeSlots.indexOf(a.time) - allTimeSlots.indexOf(b.time);
+        });
+
+        setBookings(nextBookings);
+        setStatus("");
+      },
+      (error) => {
+        console.error(error);
+        setStatus("Could not load Firebase bookings. Please check Firebase config and Firestore rules.");
+      }
+    );
+
+    return unsubscribe;
   }, []);
 
   async function submitBooking() {
-    if (!name || !phone || !date || !time) {
+    if (!name || !phone || !date || !selectedBookingTime) {
       setStatus("Please fill in name, phone, date and time.");
+      return;
+    }
+
+    if (hasBookingOverlap(bookings, date, selectedBookingTime, duration)) {
+      setStatus("That slot is no longer available. Please choose another time.");
       return;
     }
 
@@ -563,7 +1147,7 @@ export default function App() {
       name,
       phone,
       date,
-      time,
+      time: selectedBookingTime,
       players,
       duration,
       location,
@@ -571,18 +1155,20 @@ export default function App() {
       paymentStatus: "Unpaid",
       bookingStatus: "Confirmed",
       note,
+      type: "booking",
+      createdBy: "",
+      coachName: "Coach Ilham",
+      coachEmail: "",
+      role: "public",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
     };
 
     setLoading(true);
     setStatus("Saving booking...");
 
     try {
-      await fetch(GOOGLE_SCRIPT_URL, {
-        method: "POST",
-        mode: "no-cors",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(bookingData),
-      });
+      await addDoc(collection(db, "bookings"), bookingData);
 
       const whatsappMessage = encodeURIComponent(
         `Hi Coach Ilham, I want to book a tennis coaching slot.
@@ -594,7 +1180,7 @@ export default function App() {
 ` +
         `Date: ${date}
 ` +
-        `Time: ${time}
+        `Time: ${selectedBookingTime}
 ` +
         `Players: ${players}
 ` +
@@ -618,8 +1204,6 @@ export default function App() {
       setName("");
       setPhone("");
       setNote("");
-
-      setTimeout(loadBookings, 1500);
     } catch (error) {
       console.error(error);
       setStatus("Booking failed. Please WhatsApp Coach Ilham directly.");
@@ -634,9 +1218,12 @@ export default function App() {
   function getDateStatus(day) {
     if (!day) return null;
     const dayString = formatDate(day);
-    const bookedCount = bookings.filter(
-      (booking) => String(booking.date).slice(0, 10) === dayString && ["Confirmed"].includes(booking.bookingStatus)
-    ).length;
+    const dayRange = {
+      start: parseBookingDate(dayString),
+      end: parseBookingDate(dayString),
+    };
+    dayRange.end.setDate(dayRange.end.getDate() + 1);
+    const bookedCount = getExpandedReservedSlots(bookings, dayRange).length;
 
     if (bookedCount >= allTimeSlots.length) return "Full";
     if (bookedCount > 0) return `${allTimeSlots.length - bookedCount} slots left`;
@@ -644,7 +1231,15 @@ export default function App() {
   }
 
   if (isAdminPage) {
-    return <AdminDashboard bookings={bookings} onRefresh={loadBookings} />;
+    return (
+      <AdminDashboard
+        bookings={bookings}
+        onRefresh={refreshBookings}
+        user={adminUser}
+        userProfile={adminProfile}
+        authLoading={authLoading}
+      />
+    );
   }
 
   return (
@@ -691,8 +1286,8 @@ export default function App() {
         </div>
 
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-12">
-          <div className="w-full max-w-full bg-neutral-900 border border-neutral-800 rounded-3xl p-4 sm:p-6 md:p-8">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-12 items-start">
+          <div className="w-full max-w-full self-start bg-neutral-900 border border-neutral-800 rounded-3xl p-4 sm:p-6 md:p-8">
             <h2 className="text-2xl font-semibold mb-6">Booking Form</h2>
 
             <div className="space-y-4">
@@ -700,12 +1295,14 @@ export default function App() {
               <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone Number" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
               <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
 
-              <select value={time} onChange={(e) => setTime(e.target.value)} disabled={availableSlots.length === 0} className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
+              <select value={selectedBookingTime} onChange={(e) => setTime(e.target.value)} disabled={availableSlots.length === 0} className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
                 {availableSlots.length === 0 ? <option>No available slots</option> : availableSlots.map((slot) => <option key={slot}>{slot}</option>)}
               </select>
 
-              {bookedForSelectedDate.length > 0 && (
-                <p className="text-sm text-neutral-400">Unavailable: {bookedForSelectedDate.map((b) => b.time).join(", ")}</p>
+              {reservedForSelectedDate.length > 0 && (
+                <p className="text-sm text-neutral-400">
+                  Unavailable: {[...new Set(reservedForSelectedDate.map((slot) => slot.time))].join(", ")}
+                </p>
               )}
 
               <select value={location} onChange={(e) => setLocation(e.target.value)} className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
@@ -729,7 +1326,7 @@ export default function App() {
 
 
               <button onClick={submitBooking} disabled={loading || availableSlots.length === 0} className="w-full bg-white text-black rounded-2xl py-4 font-semibold hover:bg-neutral-200 transition disabled:opacity-50">
-                {loading ? "Please wait..." : "Book via WhatsApp"}
+                {loading ? "Please wait..." : "Book Now"}
               </button>
 
               {status && <p className="text-sm text-neutral-300">{status}</p>}
@@ -788,6 +1385,8 @@ export default function App() {
               bookings={bookings}
               selectedDate={date}
               onSelectDate={setDate}
+              className="min-h-[600px] flex flex-col"
+              contentClassName="min-h-[520px] flex-1"
             />
 
 
