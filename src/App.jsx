@@ -21,15 +21,20 @@ const hourlyRates = {
 };
 
 const packageOptions = {
-  four_sessions: {
-    label: "4 Sessions Package RM450",
+  "4 Sessions": {
+    label: "4 Sessions",
     totalSessions: 4,
     paymentAmount: 450,
   },
-  eight_sessions: {
-    label: "8 Sessions Package RM800",
+  "8 Sessions": {
+    label: "8 Sessions",
     totalSessions: 8,
     paymentAmount: 800,
+  },
+  Custom: {
+    label: "Custom",
+    totalSessions: 1,
+    paymentAmount: 0,
   },
 };
 
@@ -78,6 +83,7 @@ function getMonthDays(currentDate) {
 const unavailableTextPattern =
   /\b(n\/a|blocked?|emergency|not available|unavailable|manual block)\b/i;
 const noteNaPattern = /(^|[^a-z0-9])n\s*\/?\s*a([^a-z0-9]|$)/i;
+const dashboardRevenuePerHour = 100;
 
 function parseBookingDate(date) {
   if (date instanceof Date) {
@@ -131,40 +137,118 @@ function calculateCoachingFee(players, duration) {
 }
 
 function normalizeStudentName(name) {
-  return String(name || "").trim().toLowerCase();
+  return String(name || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function getCurrentCustomerCount(bookings) {
+  const customerNames = new Set();
+
+  bookings.forEach((booking) => {
+    const name = normalizeStudentName(booking.name);
+
+    if (!name) return;
+    if (name === "blocked") return;
+    if (containsUnavailableText(booking.name) || containsUnavailableText(booking.note)) return;
+    if (String(booking.type || booking.bookingType || "").trim().toLowerCase() === "blocked") return;
+    if (String(booking.bookingStatus || booking.status || "").trim().toLowerCase() === "cancelled") return;
+
+    customerNames.add(name);
+  });
+
+  return customerNames.size;
 }
 
 function getPackageOption(packageType) {
-  return packageOptions[packageType] || packageOptions.four_sessions;
+  return packageOptions[packageType] || packageOptions["4 Sessions"];
 }
 
-function getPackageRemainingSessions(packageRecord) {
-  const total = Number(packageRecord?.totalSessions || 0);
-  const used = Number(packageRecord?.usedSessions || 0);
-  return Math.max(0, total - used);
+function getClientSessions(bookings, packageRecord) {
+  const packageName = normalizeStudentName(packageRecord.clientName || packageRecord.studentName);
+  const packagePhone = cleanTableValue(packageRecord.phone);
+
+  return bookings
+    .filter((booking) => {
+      if (!isValidCoachingBooking(booking)) return false;
+
+      const bookingName = normalizeStudentName(booking.name);
+      const bookingPhone = cleanTableValue(booking.phone);
+      const nameMatches = packageName && bookingName === packageName;
+      const phoneMatches = packagePhone && bookingPhone === packagePhone;
+
+      return nameMatches && (!packagePhone || phoneMatches);
+    })
+    .sort((a, b) => {
+      const dateCompare = String(a.date || "").localeCompare(String(b.date || ""));
+      if (dateCompare !== 0) return dateCompare;
+      return allTimeSlots.indexOf(a.time) - allTimeSlots.indexOf(b.time);
+    });
 }
 
-function findActivePackage(packages, studentName) {
-  const normalizedName = normalizeStudentName(studentName);
-  if (!normalizedName) return null;
+function isBookingOnOrBeforeDate(booking, referenceDate = new Date()) {
+  const bookingDate = parseBookingDate(booking.date);
+  const compareDate = parseBookingDate(referenceDate);
 
-  return packages.find((packageRecord) => {
-    return (
-      normalizeStudentName(packageRecord.studentName) === normalizedName &&
-      getPackageRemainingSessions(packageRecord) > 0 &&
-      String(packageRecord.status || "active") === "active"
-    );
-  }) || null;
+  if (!bookingDate || !compareDate) return false;
+
+  return bookingDate <= compareDate;
+}
+
+function getPackageUsage(bookings, packageRecord) {
+  const sessions = getClientSessions(bookings, packageRecord);
+  const totalSessions = Number(packageRecord.totalPackageSessions || packageRecord.totalSessions || 0);
+  const startSession = Math.max(1, Number(packageRecord.packageStartSessionNumber || 1));
+  const packageSessions = sessions.slice(startSession - 1);
+  const attendedPackageSessions = packageSessions.filter((booking) => {
+    return isBookingOnOrBeforeDate(booking);
+  });
+  const usedSessions = attendedPackageSessions.reduce((total, booking) => {
+    return total + getBookingDuration(booking);
+  }, 0);
+
+  return {
+    totalClientSessions: sessions.length,
+    attendedClientSessions: sessions.filter((booking) => isBookingOnOrBeforeDate(booking)).length,
+    usedSessions,
+    remainingSessions: Math.max(0, totalSessions - usedSessions),
+  };
+}
+
+function matchesClientIdentity(booking, client) {
+  const clientPhone = cleanTableValue(client.phone);
+  const bookingPhone = cleanTableValue(booking.phone);
+  const clientName = normalizeStudentName(client.clientName || client.studentName || client.name);
+  const bookingName = normalizeStudentName(booking.name);
+
+  if (clientPhone && bookingPhone) return clientPhone === bookingPhone;
+
+  return Boolean(clientName && bookingName && clientName === bookingName);
+}
+
+function getClientBookingHistory(bookings, client) {
+  return bookings
+    .filter((booking) => {
+      if (!matchesClientIdentity(booking, client)) return false;
+      if (String(booking.type || booking.bookingType || "").toLowerCase() === "blocked") return false;
+      if (String(booking.name || "").trim().toLowerCase() === "blocked") return false;
+      if (containsUnavailableText(booking.name) || containsUnavailableText(booking.note)) return false;
+
+      return true;
+    })
+    .sort((a, b) => {
+      const dateCompare = String(b.date || "").localeCompare(String(a.date || ""));
+      if (dateCompare !== 0) return dateCompare;
+      return allTimeSlots.indexOf(b.time) - allTimeSlots.indexOf(a.time);
+    });
+}
+
+function isCountedStudentSession(booking) {
+  return ["confirmed", "completed"].includes(
+    String(booking.bookingStatus || booking.status || "").trim().toLowerCase()
+  );
 }
 
 function getBookingRevenue(booking) {
-  const storedFee = Number(booking.coachingFee);
-
-  if (Number.isFinite(storedFee) && storedFee > 0) {
-    return storedFee;
-  }
-
-  return calculateCoachingFee(booking.players, booking.duration);
+  return getBookingDuration(booking) * dashboardRevenuePerHour;
 }
 
 function getPeriodRange(period, referenceDate = new Date()) {
@@ -616,30 +700,178 @@ function WeeklySchedule({
   );
 }
 
-function PackageTracker({ packages, canEdit }) {
+function PackageTracker({ packages, bookings, canEdit, user, userProfile }) {
   const [editingPackageId, setEditingPackageId] = useState("");
   const [editPackage, setEditPackage] = useState({});
+  const [newPackage, setNewPackage] = useState({
+    clientName: "",
+    phone: "",
+    packageType: "8 Sessions",
+    packageStartSessionNumber: 1,
+    totalPackageSessions: 8,
+    paymentDate: formatDate(new Date()),
+    paymentAmount: 800,
+    paymentStatus: "Paid",
+    notes: "",
+  });
+
+  const [studentSearchQuery, setStudentSearchQuery] = useState("");
+  const [showStudentSuggestions, setShowStudentSuggestions] = useState(false);
+  const [packageStatus, setPackageStatus] = useState("");
+
+  const studentSuggestions = useMemo(() => {
+    const query = studentSearchQuery.trim().toLowerCase();
+    if (query.length < 1) return [];
+
+    const studentsByKey = new Map();
+
+    bookings.forEach((booking) => {
+      if (!isValidCoachingBooking(booking)) return;
+
+      const clientName = String(booking.name || "").trim();
+      const phone = cleanTableValue(booking.phone);
+      if (!clientName && !phone) return;
+
+      const key = phone || normalizeStudentName(clientName);
+      const current = studentsByKey.get(key) || {
+        clientName,
+        phone,
+        totalSessions: 0,
+      };
+
+      current.clientName = current.clientName || clientName;
+      current.phone = current.phone || phone;
+      if (isBookingOnOrBeforeDate(booking)) {
+        current.totalSessions += getBookingDuration(booking);
+      }
+      studentsByKey.set(key, current);
+    });
+
+    return Array.from(studentsByKey.values())
+      .filter((student) => {
+        const name = student.clientName.toLowerCase();
+        const phone = student.phone.toLowerCase();
+        return name.includes(query) || phone.includes(query);
+      })
+      .sort((a, b) => {
+        const aPhoneMatch = a.phone.toLowerCase().includes(query) ? 0 : 1;
+        const bPhoneMatch = b.phone.toLowerCase().includes(query) ? 0 : 1;
+        if (aPhoneMatch !== bPhoneMatch) return aPhoneMatch - bPhoneMatch;
+        return a.clientName.localeCompare(b.clientName);
+      })
+      .slice(0, 8);
+  }, [bookings, studentSearchQuery]);
+
+  const selectedStudentTotalSessions = useMemo(() => {
+    return getClientSessions(bookings, newPackage)
+      .filter((booking) => isBookingOnOrBeforeDate(booking))
+      .reduce((total, booking) => {
+        return total + getBookingDuration(booking);
+      }, 0);
+  }, [bookings, newPackage]);
+
+  function findMatchingPackage(clientName, phone) {
+    const normalizedName = normalizeStudentName(clientName);
+    const normalizedPhone = cleanTableValue(phone);
+
+    return packages.find((packageRecord) => {
+      const packageName = normalizeStudentName(packageRecord.clientName || packageRecord.studentName);
+      const packagePhone = cleanTableValue(packageRecord.phone);
+      if (normalizedPhone && packagePhone) return packagePhone === normalizedPhone;
+      return normalizedName && packageName === normalizedName;
+    }) || null;
+  }
+
+  function getPackageFormFromRecord(packageRecord) {
+    return {
+      packageType: packageRecord.packageType || "8 Sessions",
+      packageStartSessionNumber: packageRecord.packageStartSessionNumber || 1,
+      totalPackageSessions: packageRecord.totalPackageSessions || packageRecord.totalSessions || 8,
+      paymentDate: packageRecord.paymentDate || formatDate(new Date()),
+      paymentAmount: packageRecord.paymentAmount || getPackageOption(packageRecord.packageType || "8 Sessions").paymentAmount,
+      paymentStatus: packageRecord.paymentStatus || "Paid",
+      notes: packageRecord.notes || "",
+    };
+  }
+
+  function selectStudentSuggestion(student) {
+    const existingPackage = findMatchingPackage(student.clientName, student.phone);
+
+    setNewPackage((current) => ({
+      ...current,
+      clientName: student.clientName,
+      phone: student.phone,
+      packageStartSessionNumber: existingPackage?.packageStartSessionNumber || Math.max(1, student.totalSessions + 1),
+      ...(existingPackage ? getPackageFormFromRecord(existingPackage) : {}),
+    }));
+    setStudentSearchQuery(`${student.clientName} ${student.phone}`.trim());
+    setShowStudentSuggestions(false);
+  }
+
+  function updateStudentSearch(field, value) {
+    setNewPackage((current) => ({ ...current, [field]: value }));
+    setStudentSearchQuery(value);
+    setShowStudentSuggestions(value.trim().length > 0);
+    setPackageStatus("");
+  }
+
+  function hideStudentSuggestionsSoon() {
+    window.setTimeout(() => setShowStudentSuggestions(false), 120);
+  }
+  function applyPackageType(packageType, setter) {
+    const option = getPackageOption(packageType);
+    setter((current) => ({
+      ...current,
+      packageType,
+      totalPackageSessions:
+        packageType === "Custom"
+          ? current.totalPackageSessions || option.totalSessions
+          : option.totalSessions,
+      paymentAmount:
+        packageType === "Custom"
+          ? current.paymentAmount || option.paymentAmount
+          : option.paymentAmount,
+    }));
+  }
 
   function startEditPackage(packageRecord) {
     setEditingPackageId(packageRecord.id);
     setEditPackage({
-      studentName: packageRecord.studentName || "",
-      usedSessions: packageRecord.usedSessions ?? 0,
+      clientName: packageRecord.clientName || packageRecord.studentName || "",
+      phone: cleanTableValue(packageRecord.phone),
+      packageType: packageRecord.packageType || "8 Sessions",
+      packageStartSessionNumber: packageRecord.packageStartSessionNumber || 1,
+      totalPackageSessions: packageRecord.totalPackageSessions || packageRecord.totalSessions || 8,
+      paymentDate: packageRecord.paymentDate || "",
+      paymentAmount: packageRecord.paymentAmount || 0,
       paymentStatus: packageRecord.paymentStatus || "Unpaid",
-      packageStartDate: packageRecord.packageStartDate || "",
+      notes: packageRecord.notes || "",
     });
   }
 
   async function savePackage(packageRecord) {
-    const totalSessions = Number(packageRecord.totalSessions || 0);
-    const usedSessions = Number(editPackage.usedSessions || 0);
+    const clientName = String(editPackage.clientName || "").trim();
+    const totalPackageSessions = Math.max(0, Number(editPackage.totalPackageSessions || 0));
+    const packageStartSessionNumber = Math.max(1, Number(editPackage.packageStartSessionNumber || 1));
+
+    if (!clientName) {
+      alert("Client name is required.");
+      return;
+    }
 
     await updateDoc(doc(db, "packages", packageRecord.id), {
-      studentName: editPackage.studentName,
-      usedSessions,
-      remainingSessions: Math.max(0, totalSessions - usedSessions),
+      clientName,
+      studentName: clientName,
+      phone: cleanTableValue(editPackage.phone),
+      packageType: editPackage.packageType,
+      packageLabel: getPackageOption(editPackage.packageType).label,
+      packageStartSessionNumber,
+      totalPackageSessions,
+      totalSessions: totalPackageSessions,
+      paymentDate: editPackage.paymentDate || "",
+      paymentAmount: Number(editPackage.paymentAmount || 0),
       paymentStatus: editPackage.paymentStatus,
-      packageStartDate: editPackage.packageStartDate,
+      notes: editPackage.notes || "",
       updatedAt: serverTimestamp(),
     });
 
@@ -647,15 +879,82 @@ function PackageTracker({ packages, canEdit }) {
     setEditPackage({});
   }
 
+  async function createPackage() {
+    const clientName = String(newPackage.clientName || "").trim();
+    const totalPackageSessions = Math.max(0, Number(newPackage.totalPackageSessions || 0));
+    const packageStartSessionNumber = Math.max(1, Number(newPackage.packageStartSessionNumber || 1));
+
+    setShowStudentSuggestions(false);
+
+    if (!clientName) {
+      setPackageStatus("Client name is required.");
+      return;
+    }
+
+    try {
+      setPackageStatus("Saving package...");
+
+      const packageData = {
+        clientName,
+        studentName: clientName,
+        phone: cleanTableValue(newPackage.phone),
+        packageType: newPackage.packageType,
+        packageLabel: getPackageOption(newPackage.packageType).label,
+        packageStartSessionNumber,
+        totalPackageSessions,
+        totalSessions: totalPackageSessions,
+        paymentDate: newPackage.paymentDate || "",
+        paymentAmount: Number(newPackage.paymentAmount || 0),
+        paymentStatus: newPackage.paymentStatus || "Paid",
+        notes: newPackage.notes || "",
+        status: "active",
+        coachName: getCoachName(user, userProfile),
+        coachEmail: getCoachEmail(user, userProfile),
+        role: getUserRole(userProfile),
+        updatedAt: serverTimestamp(),
+      };
+      const existingPackage = findMatchingPackage(clientName, newPackage.phone);
+
+      if (existingPackage) {
+        await updateDoc(doc(db, "packages", existingPackage.id), packageData);
+        setPackageStatus("Existing package updated.");
+      } else {
+        await addDoc(collection(db, "packages"), {
+          ...packageData,
+          createdBy: user?.uid || "",
+          createdAt: serverTimestamp(),
+        });
+        setPackageStatus("Package added.");
+      }
+
+      setNewPackage({
+        clientName: "",
+        phone: "",
+        packageType: "8 Sessions",
+        packageStartSessionNumber: 1,
+        totalPackageSessions: 8,
+        paymentDate: formatDate(new Date()),
+        paymentAmount: 800,
+        paymentStatus: "Paid",
+        notes: "",
+      });
+      setStudentSearchQuery("");
+    } catch (error) {
+      console.error(error);
+      setPackageStatus(`Package save failed: ${error.message || "Please check Firestore rules."}`);
+    }
+  }
+
   async function markPackagePaid(packageRecord) {
     await updateDoc(doc(db, "packages", packageRecord.id), {
       paymentStatus: "Paid",
+      paymentDate: packageRecord.paymentDate || formatDate(new Date()),
       updatedAt: serverTimestamp(),
     });
   }
 
   async function deletePackage(packageRecord) {
-    if (!window.confirm(`Delete package for ${packageRecord.studentName}?`)) return;
+    if (!window.confirm(`Delete package for ${packageRecord.clientName || packageRecord.studentName}?`)) return;
     await deleteDoc(doc(db, "packages", packageRecord.id));
   }
 
@@ -665,104 +964,108 @@ function PackageTracker({ packages, canEdit }) {
         <div>
           <h2 className="text-2xl font-semibold">Package Tracker</h2>
           <p className="mt-2 text-neutral-400">
-            Track student packages, payments, and remaining sessions.
+            Mark client packages from admin only. Usage is calculated from client bookings by name and phone.
           </p>
         </div>
       </div>
 
+      {canEdit && (
+        <div className="mt-5 grid grid-cols-1 gap-3 rounded-2xl border border-neutral-800 bg-neutral-950 p-4 md:grid-cols-4">
+          <div className="relative md:col-span-2" onBlur={hideStudentSuggestionsSoon}>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <input value={newPackage.clientName} onFocus={() => setShowStudentSuggestions(studentSearchQuery.trim().length > 0)} onChange={(e) => updateStudentSearch("clientName", e.target.value)} placeholder="Client name" className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" />
+              <input value={newPackage.phone} onFocus={() => setShowStudentSuggestions(studentSearchQuery.trim().length > 0)} onChange={(e) => updateStudentSearch("phone", e.target.value)} placeholder="Phone number" className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" />
+            </div>
+            {showStudentSuggestions && studentSuggestions.length > 0 && (
+              <div className="absolute left-0 right-0 top-full z-30 mt-2 max-h-64 overflow-y-auto rounded-2xl border border-neutral-700 bg-neutral-950 shadow-2xl">
+                {studentSuggestions.map((student) => (
+                  <button
+                    key={`${student.phone || student.clientName}-${student.clientName}`}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => selectStudentSuggestion(student)}
+                    className="flex w-full items-center justify-between gap-4 border-b border-neutral-800 px-4 py-3 text-left hover:bg-neutral-800"
+                  >
+                    <span>
+                      <span className="block font-semibold text-white">{student.clientName}</span>
+                      <span className="block text-xs text-neutral-400">{student.phone || "No phone"}</span>
+                    </span>
+                    <span className="text-xs text-lime-300">{student.totalSessions} attended</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {selectedStudentTotalSessions > 0 && (
+              <p className="mt-2 text-xs text-neutral-400">Existing attended sessions: {selectedStudentTotalSessions}</p>
+            )}
+          </div>
+          <select value={newPackage.packageType} onChange={(e) => applyPackageType(e.target.value, setNewPackage)} className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2">
+            {Object.keys(packageOptions).map((packageType) => <option key={packageType} value={packageType}>{packageType}</option>)}
+          </select>
+          <input type="number" min="1" step="1" value={newPackage.packageStartSessionNumber} onChange={(e) => setNewPackage((current) => ({ ...current, packageStartSessionNumber: e.target.value }))} placeholder="Package start session" className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" />
+          <input type="number" min="0" step="0.5" value={newPackage.totalPackageSessions} onChange={(e) => setNewPackage((current) => ({ ...current, totalPackageSessions: e.target.value }))} placeholder="Total sessions" className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" />
+          <input type="date" value={newPackage.paymentDate} onChange={(e) => setNewPackage((current) => ({ ...current, paymentDate: e.target.value }))} className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" />
+          <input type="number" min="0" step="1" value={newPackage.paymentAmount} onChange={(e) => setNewPackage((current) => ({ ...current, paymentAmount: e.target.value }))} placeholder="Payment amount" className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" />
+          <select value={newPackage.paymentStatus} onChange={(e) => setNewPackage((current) => ({ ...current, paymentStatus: e.target.value }))} className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2">
+            <option>Paid</option>
+            <option>Unpaid</option>
+            <option>Partial</option>
+          </select>
+          <textarea value={newPackage.notes} onChange={(e) => setNewPackage((current) => ({ ...current, notes: e.target.value }))} placeholder="Notes" className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2 md:col-span-3" />
+          <button type="button" onMouseDown={() => setShowStudentSuggestions(false)} onClick={createPackage} className="rounded-xl bg-lime-400 px-4 py-2 font-semibold text-black">Add Package</button>
+          {packageStatus && <p className="text-sm text-neutral-300 md:col-span-4">{packageStatus}</p>}
+        </div>
+      )}
+
       <div className="mt-5 overflow-x-auto">
-        <table className="w-full min-w-[1000px] text-sm">
+        <table className="w-full min-w-[1200px] text-sm">
           <thead className="text-neutral-400">
             <tr>
-              <th className="p-3 text-left">Student</th>
+              <th className="p-3 text-left">Client</th>
+              <th className="p-3 text-left">Phone</th>
+              <th className="p-3 text-left">Attended Sessions</th>
               <th className="p-3 text-left">Package</th>
-              <th className="p-3 text-left">Start Date</th>
+              <th className="p-3 text-left">Package Start</th>
               <th className="p-3 text-left">Used / Total</th>
               <th className="p-3 text-left">Remaining</th>
               <th className="p-3 text-left">Payment</th>
+              <th className="p-3 text-left">Notes</th>
               <th className="p-3 text-left">Actions</th>
             </tr>
           </thead>
           <tbody>
             {packages.map((packageRecord) => {
               const isEditing = editingPackageId === packageRecord.id;
-              const remaining = getPackageRemainingSessions(packageRecord);
+              const usage = getPackageUsage(bookings, packageRecord);
+              const totalPackageSessions = Number(packageRecord.totalPackageSessions || packageRecord.totalSessions || 0);
+              const clientName = packageRecord.clientName || packageRecord.studentName || "";
+              const paymentAmount = Number(packageRecord.paymentAmount || 0);
 
               return (
                 <tr key={packageRecord.id} className="border-t border-neutral-800">
+                  <td className="p-3">{isEditing ? <input value={editPackage.clientName} onChange={(e) => setEditPackage((current) => ({ ...current, clientName: e.target.value }))} className="w-full rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" /> : clientName}</td>
+                  <td className="p-3">{isEditing ? <input value={editPackage.phone} onChange={(e) => setEditPackage((current) => ({ ...current, phone: e.target.value }))} className="w-full rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" /> : cleanTableValue(packageRecord.phone) || "-"}</td>
+                  <td className="p-3">{usage.attendedClientSessions}</td>
+                  <td className="p-3">{isEditing ? <select value={editPackage.packageType} onChange={(e) => applyPackageType(e.target.value, setEditPackage)} className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2">{Object.keys(packageOptions).map((packageType) => <option key={packageType} value={packageType}>{packageType}</option>)}</select> : packageRecord.packageLabel || getPackageOption(packageRecord.packageType).label}</td>
+                  <td className="p-3">{isEditing ? <input type="number" min="1" step="1" value={editPackage.packageStartSessionNumber} onChange={(e) => setEditPackage((current) => ({ ...current, packageStartSessionNumber: e.target.value }))} className="w-28 rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" /> : `Session ${packageRecord.packageStartSessionNumber || 1}`}</td>
+                  <td className="p-3">{isEditing ? <input type="number" min="0" step="0.5" value={editPackage.totalPackageSessions} onChange={(e) => setEditPackage((current) => ({ ...current, totalPackageSessions: e.target.value }))} className="w-24 rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" /> : `${usage.usedSessions} / ${totalPackageSessions}`}</td>
+                  <td className="p-3 text-lime-300">{usage.remainingSessions}</td>
                   <td className="p-3">
                     {isEditing ? (
-                      <input
-                        value={editPackage.studentName}
-                        onChange={(e) => setEditPackage((current) => ({ ...current, studentName: e.target.value }))}
-                        className="w-full rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2"
-                      />
-                    ) : (
-                      packageRecord.studentName
-                    )}
+                      <div className="grid gap-2">
+                        <input type="date" value={editPackage.paymentDate} onChange={(e) => setEditPackage((current) => ({ ...current, paymentDate: e.target.value }))} className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" />
+                        <input type="number" min="0" step="1" value={editPackage.paymentAmount} onChange={(e) => setEditPackage((current) => ({ ...current, paymentAmount: e.target.value }))} className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" />
+                        <select value={editPackage.paymentStatus} onChange={(e) => setEditPackage((current) => ({ ...current, paymentStatus: e.target.value }))} className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2"><option>Paid</option><option>Unpaid</option><option>Partial</option></select>
+                      </div>
+                    ) : `${packageRecord.paymentStatus || "Unpaid"} - RM${paymentAmount}${packageRecord.paymentDate ? ` - ${packageRecord.paymentDate}` : ""}`}
                   </td>
-                  <td className="p-3">{packageRecord.packageLabel || getPackageOption(packageRecord.packageType).label}</td>
-                  <td className="p-3">
-                    {isEditing ? (
-                      <input
-                        type="date"
-                        value={editPackage.packageStartDate}
-                        onChange={(e) => setEditPackage((current) => ({ ...current, packageStartDate: e.target.value }))}
-                        className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2"
-                      />
-                    ) : (
-                      packageRecord.packageStartDate
-                    )}
-                  </td>
-                  <td className="p-3">
-                    {isEditing ? (
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.5"
-                        value={editPackage.usedSessions}
-                        onChange={(e) => setEditPackage((current) => ({ ...current, usedSessions: e.target.value }))}
-                        className="w-24 rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2"
-                      />
-                    ) : (
-                      `${packageRecord.usedSessions || 0} / ${packageRecord.totalSessions}`
-                    )}
-                  </td>
-                  <td className="p-3 text-lime-300">{remaining}</td>
-                  <td className="p-3">
-                    {isEditing ? (
-                      <select
-                        value={editPackage.paymentStatus}
-                        onChange={(e) => setEditPackage((current) => ({ ...current, paymentStatus: e.target.value }))}
-                        className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2"
-                      >
-                        <option>Unpaid</option>
-                        <option>Paid</option>
-                        <option>Partial</option>
-                      </select>
-                    ) : (
-                      `${packageRecord.paymentStatus || "Unpaid"} · RM${packageRecord.paymentAmount || 0}`
-                    )}
-                  </td>
+                  <td className="p-3">{isEditing ? <textarea value={editPackage.notes} onChange={(e) => setEditPackage((current) => ({ ...current, notes: e.target.value }))} className="w-full rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" /> : packageRecord.notes || "-"}</td>
                   <td className="p-3">
                     {canEdit ? (
                       <div className="flex flex-wrap gap-2">
-                        {isEditing ? (
-                          <>
-                            <button onClick={() => savePackage(packageRecord)} className="rounded-xl bg-lime-400 px-3 py-2 text-black">Save</button>
-                            <button onClick={() => setEditingPackageId("")} className="rounded-xl bg-neutral-800 px-3 py-2">Cancel</button>
-                          </>
-                        ) : (
-                          <>
-                            <button onClick={() => startEditPackage(packageRecord)} className="rounded-xl bg-neutral-800 px-3 py-2">Edit</button>
-                            <button onClick={() => markPackagePaid(packageRecord)} className="rounded-xl bg-lime-400 px-3 py-2 text-black">Mark paid</button>
-                            <button onClick={() => deletePackage(packageRecord)} className="rounded-xl bg-red-500/80 px-3 py-2 text-white">Delete</button>
-                          </>
-                        )}
+                        {isEditing ? <><button onClick={() => savePackage(packageRecord)} className="rounded-xl bg-lime-400 px-3 py-2 text-black">Save</button><button onClick={() => setEditingPackageId("")} className="rounded-xl bg-neutral-800 px-3 py-2">Cancel</button></> : <><button onClick={() => startEditPackage(packageRecord)} className="rounded-xl bg-neutral-800 px-3 py-2">Edit</button><button onClick={() => markPackagePaid(packageRecord)} className="rounded-xl bg-lime-400 px-3 py-2 text-black">Mark paid</button><button onClick={() => deletePackage(packageRecord)} className="rounded-xl bg-red-500/80 px-3 py-2 text-white">Delete</button></>}
                       </div>
-                    ) : (
-                      <span className="text-neutral-500">Read only</span>
-                    )}
+                    ) : <span className="text-neutral-500">Read only</span>}
                   </td>
                 </tr>
               );
@@ -770,14 +1073,237 @@ function PackageTracker({ packages, canEdit }) {
           </tbody>
         </table>
 
-        {packages.length === 0 && (
-          <p className="p-4 text-sm text-neutral-400">No active packages yet.</p>
-        )}
+        {packages.length === 0 && <p className="p-4 text-sm text-neutral-400">No active packages yet.</p>}
       </div>
     </div>
   );
 }
 
+function StudentHistory({ bookings, packages }) {
+  const [studentQuery, setStudentQuery] = useState("");
+  const [selectedStudentKey, setSelectedStudentKey] = useState("");
+
+  const students = useMemo(() => {
+    const studentsByKey = new Map();
+
+    bookings.forEach((booking) => {
+      if (String(booking.type || booking.bookingType || "").toLowerCase() === "blocked") return;
+      if (String(booking.name || "").trim().toLowerCase() === "blocked") return;
+      if (containsUnavailableText(booking.name) || containsUnavailableText(booking.note)) return;
+
+      const clientName = String(booking.name || "").trim();
+      const phone = cleanTableValue(booking.phone);
+      if (!clientName && !phone) return;
+
+      const key = phone || normalizeStudentName(clientName);
+      const current = studentsByKey.get(key) || {
+        key,
+        clientName,
+        phone,
+        totalSessions: 0,
+        totalRevenue: 0,
+        totalPaid: 0,
+      };
+
+      current.clientName = current.clientName || clientName;
+      current.phone = current.phone || phone;
+
+      if (isCountedStudentSession(booking)) {
+        const revenue = getBookingRevenue(booking);
+        current.totalSessions += getBookingDuration(booking);
+        current.totalRevenue += revenue;
+
+        if (String(booking.paymentStatus || "").trim().toLowerCase() === "paid") {
+          current.totalPaid += revenue;
+        }
+      }
+
+      studentsByKey.set(key, current);
+    });
+
+    return Array.from(studentsByKey.values()).sort((a, b) => {
+      return a.clientName.localeCompare(b.clientName);
+    });
+  }, [bookings]);
+
+  const studentMatches = useMemo(() => {
+    const query = studentQuery.trim().toLowerCase();
+    if (query.length < 1) return [];
+
+    return students
+      .filter((student) => {
+        return (
+          student.clientName.toLowerCase().includes(query) ||
+          student.phone.toLowerCase().includes(query)
+        );
+      })
+      .slice(0, 8);
+  }, [studentQuery, students]);
+
+  const selectedStudent = useMemo(() => {
+    return students.find((student) => student.key === selectedStudentKey) || null;
+  }, [selectedStudentKey, students]);
+
+  const selectedPackage = useMemo(() => {
+    if (!selectedStudent) return null;
+
+    return packages.find((packageRecord) => {
+      return matchesClientIdentity(
+        {
+          name: packageRecord.clientName || packageRecord.studentName,
+          phone: packageRecord.phone,
+        },
+        selectedStudent
+      );
+    }) || null;
+  }, [packages, selectedStudent]);
+
+  const selectedPackageUsage = selectedPackage ? getPackageUsage(bookings, selectedPackage) : null;
+  const selectedHistory = selectedStudent ? getClientBookingHistory(bookings, selectedStudent) : [];
+  const chronologicalHistory = [...selectedHistory].reverse();
+
+  function getSessionPackageLabel(booking) {
+    if (!selectedPackage || !isCountedStudentSession(booking)) return "Normal";
+
+    const sessionIndex = chronologicalHistory.findIndex((session) => session.id === booking.id);
+    const sessionNumber = sessionIndex + 1;
+    const packageStart = Math.max(1, Number(selectedPackage.packageStartSessionNumber || 1));
+    const totalPackageSessions = Number(selectedPackage.totalPackageSessions || selectedPackage.totalSessions || 0);
+
+    if (sessionNumber < packageStart) return "Normal";
+
+    const packageSessionNumber = chronologicalHistory
+      .slice(packageStart - 1, sessionIndex + 1)
+      .filter(isCountedStudentSession)
+      .reduce((total, session) => total + getBookingDuration(session), 0);
+
+    return `Package Session ${packageSessionNumber}/${totalPackageSessions}`;
+  }
+
+  function selectStudent(student) {
+    setSelectedStudentKey(student.key);
+    setStudentQuery(`${student.clientName} ${student.phone}`.trim());
+  }
+
+  return (
+    <div className="mt-8 rounded-3xl border border-neutral-800 bg-neutral-900 p-6">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h2 className="text-2xl font-semibold">Student History</h2>
+          <p className="mt-2 text-neutral-400">
+            Search a student to view past sessions, payments, revenue, and package status.
+          </p>
+        </div>
+        <div className="relative w-full md:max-w-md">
+          <input
+            value={studentQuery}
+            onChange={(e) => {
+              setStudentQuery(e.target.value);
+              setSelectedStudentKey("");
+            }}
+            placeholder="Search student name or phone"
+            className="w-full rounded-2xl border border-neutral-700 bg-neutral-800 px-4 py-3 outline-none focus:border-lime-400"
+          />
+          {studentQuery.trim().length > 0 && !selectedStudent && studentMatches.length > 0 && (
+            <div className="absolute left-0 right-0 top-full z-20 mt-2 max-h-64 overflow-y-auto rounded-2xl border border-neutral-700 bg-neutral-950 shadow-2xl">
+              {studentMatches.map((student) => (
+                <button
+                  key={student.key}
+                  type="button"
+                  onClick={() => selectStudent(student)}
+                  className="flex w-full items-center justify-between gap-4 border-b border-neutral-800 px-4 py-3 text-left hover:bg-neutral-800"
+                >
+                  <span>
+                    <span className="block font-semibold">{student.clientName}</span>
+                    <span className="block text-xs text-neutral-400">{student.phone || "No phone"}</span>
+                  </span>
+                  <span className="text-xs text-lime-300">{student.totalSessions} sessions</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {selectedStudent ? (
+        <div className="mt-6">
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="rounded-2xl bg-neutral-950 p-4">
+              <h3 className="text-xl font-semibold text-lime-300">{selectedStudent.clientName}</h3>
+              <p className="mt-1 text-sm text-neutral-400">Phone: {selectedStudent.phone || "-"}</p>
+              <p className="mt-3 text-sm text-neutral-300">Total Sessions: {selectedStudent.totalSessions}</p>
+            </div>
+            <div className="rounded-2xl bg-neutral-950 p-4">
+              <p className="text-sm text-neutral-400">Total Paid</p>
+              <h3 className="mt-1 text-2xl font-semibold">RM{selectedStudent.totalPaid}</h3>
+              <p className="mt-3 text-sm text-neutral-400">Total Revenue</p>
+              <h3 className="mt-1 text-2xl font-semibold text-lime-300">RM{selectedStudent.totalRevenue}</h3>
+            </div>
+            <div className="rounded-2xl bg-neutral-950 p-4">
+              <p className="text-sm text-neutral-400">Package Status</p>
+              {selectedPackage ? (
+                <>
+                  <h3 className="mt-1 text-xl font-semibold">{selectedPackage.packageLabel || selectedPackage.packageType}</h3>
+                  <p className="mt-2 text-sm text-neutral-300">
+                    Used: {selectedPackageUsage.usedSessions}/{selectedPackage.totalPackageSessions || selectedPackage.totalSessions}
+                  </p>
+                  <p className="text-sm text-lime-300">Remaining: {selectedPackageUsage.remainingSessions}</p>
+                  <p className="mt-2 text-xs text-neutral-400">Starts at Session {selectedPackage.packageStartSessionNumber || 1}</p>
+                </>
+              ) : (
+                <p className="mt-2 text-sm text-neutral-400">No package assigned.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-6 overflow-x-auto rounded-2xl border border-neutral-800">
+            <table className="w-full min-w-[1000px] text-sm">
+              <thead className="bg-neutral-800 text-neutral-300">
+                <tr>
+                  <th className="p-3 text-left">Date</th>
+                  <th className="p-3 text-left">Time</th>
+                  <th className="p-3 text-left">Duration</th>
+                  <th className="p-3 text-left">Payment Amount</th>
+                  <th className="p-3 text-left">Payment Status</th>
+                  <th className="p-3 text-left">Booking Status</th>
+                  <th className="p-3 text-left">Package</th>
+                  <th className="p-3 text-left">Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedHistory.map((booking) => {
+                  const status = booking.bookingStatus || booking.status || "-";
+                  const isCancelled = String(status).toLowerCase() === "cancelled";
+                  const paymentAmount = isCountedStudentSession(booking) ? getBookingRevenue(booking) : 0;
+
+                  return (
+                    <tr key={booking.id} className="border-t border-neutral-800">
+                      <td className="p-3">{booking.date}</td>
+                      <td className="p-3">{booking.time}</td>
+                      <td className="p-3">{getBookingDuration(booking)} hour(s)</td>
+                      <td className="p-3">RM{paymentAmount}</td>
+                      <td className="p-3">{booking.paymentStatus || "-"}</td>
+                      <td className={`p-3 ${isCancelled ? "text-red-300" : "text-lime-300"}`}>{status}</td>
+                      <td className="p-3">{getSessionPackageLabel(booking)}</td>
+                      <td className="p-3">{booking.note || "-"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {selectedHistory.length === 0 && (
+              <p className="p-4 text-sm text-neutral-400">No session history found.</p>
+            )}
+          </div>
+        </div>
+      ) : (
+        <p className="mt-5 rounded-2xl bg-neutral-950 p-4 text-sm text-neutral-400">
+          Search and select a student to view history.
+        </p>
+      )}
+    </div>
+  );
+}
 function NotificationCenter({ notifications }) {
   const [isOpen, setIsOpen] = useState(false);
   const unreadNotifications = notifications.filter((notification) => !notification.isRead);
@@ -890,6 +1416,9 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
   const [currentPage, setCurrentPage] = useState(1);
   const [bookingSearchQuery, setBookingSearchQuery] = useState("");
   const [bookingSort, setBookingSort] = useState({ key: "date", direction: "desc" });
+  const [editingPhoneBookingId, setEditingPhoneBookingId] = useState("");
+  const [editingPhoneValue, setEditingPhoneValue] = useState("");
+  const [phoneEditStatus, setPhoneEditStatus] = useState("");
   const [adminWeekDate, setAdminWeekDate] = useState(formatDate(new Date()));
   const rowsPerPage = 10;
   const userRole = getUserRole(userProfile);
@@ -928,6 +1457,7 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
     month: getBookingStats(visibleBookings, "month", adminWeekDate),
     year: getBookingStats(visibleBookings, "year"),
   };
+  const currentCustomerCount = getCurrentCustomerCount(visibleBookings);
 
 
   const clientBookings = useMemo(() => {
@@ -1019,6 +1549,43 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
     );
   }
 
+  function startPhoneEdit(booking) {
+    if (!canEdit) return;
+
+    setEditingPhoneBookingId(booking.id);
+    setEditingPhoneValue(cleanTableValue(booking.phone));
+    setPhoneEditStatus("");
+  }
+
+  function cancelPhoneEdit() {
+    setEditingPhoneBookingId("");
+    setEditingPhoneValue("");
+  }
+
+  async function savePhoneEdit(booking) {
+    const nextPhone = editingPhoneValue.trim();
+
+    if (!booking?.id || editingPhoneBookingId !== booking.id) return;
+
+    if (nextPhone === cleanTableValue(booking.phone)) {
+      cancelPhoneEdit();
+      return;
+    }
+
+    try {
+      setPhoneEditStatus("Saving phone number...");
+      await updateDoc(doc(db, "bookings", booking.id), {
+        phone: nextPhone,
+        updatedAt: serverTimestamp(),
+      });
+      setPhoneEditStatus("Phone number updated.");
+      cancelPhoneEdit();
+    } catch (error) {
+      console.error(error);
+      setPhoneEditStatus(`Phone update failed: ${error.message || "Please check permissions."}`);
+    }
+  }
+
   async function saveWeeklyScheduleCell({ date, time, booking, value }) {
     if (!canEdit) {
       alert("Your account is read-only.");
@@ -1048,23 +1615,6 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
     }
 
     const isBlocked = containsUnavailableText(text);
-    const packageRecord = !booking?.id && !isBlocked
-      ? findActivePackage(visiblePackages, text)
-      : null;
-    let packageDeductedSessions = 0;
-
-    if (packageRecord) {
-      const totalSessions = Number(packageRecord.totalSessions || 0);
-      const usedSessions = Number(packageRecord.usedSessions || 0);
-      packageDeductedSessions = Math.min(1, Math.max(0, totalSessions - usedSessions));
-      const nextUsedSessions = Math.min(totalSessions, usedSessions + packageDeductedSessions);
-
-      await updateDoc(doc(db, "packages", packageRecord.id), {
-        usedSessions: nextUsedSessions,
-        remainingSessions: Math.max(0, totalSessions - nextUsedSessions),
-        updatedAt: serverTimestamp(),
-      });
-    }
 
     const scheduleData = {
       name: isBlocked ? "Blocked" : text,
@@ -1079,10 +1629,10 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
       bookingStatus: "Confirmed",
       note: isBlocked ? text : "",
       type: isBlocked ? "blocked" : "booking",
-      paymentType: packageRecord ? "package" : booking?.paymentType || "pay_per_session",
-      packageId: packageRecord?.id || booking?.packageId || "",
-      packageType: packageRecord?.packageType || booking?.packageType || "",
-      packageDeductedSessions: packageDeductedSessions || booking?.packageDeductedSessions || 0,
+      paymentType: booking?.paymentType || "pay_per_session",
+      packageId: booking?.packageId || "",
+      packageType: booking?.packageType || "",
+      packageDeductedSessions: booking?.packageDeductedSessions || 0,
       createdBy: booking?.createdBy || user?.uid || "",
       coachName: booking?.coachName || getCoachName(user, userProfile),
       coachEmail: booking?.coachEmail || getCoachEmail(user, userProfile),
@@ -1289,7 +1839,13 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
           </div>
         </div>
 
-        <div className="mt-8 grid md:grid-cols-3 gap-4">
+        <div className="mt-8 grid md:grid-cols-4 gap-4">
+          <div className="rounded-3xl bg-neutral-900 border border-neutral-800 p-6">
+            <p className="text-sm text-neutral-400">Current Customers</p>
+            <h2 className="mt-4 text-4xl font-bold text-lime-300">
+              {currentCustomerCount}
+            </h2>
+          </div>
           {[
             ["This Week", bookingStats.week, adminWeekRangeLabel],
             ["This Month", bookingStats.month, adminMonthLabel],
@@ -1396,7 +1952,8 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
           </div>
         )}
 
-        <PackageTracker packages={visiblePackages} canEdit={canEdit} />
+        <PackageTracker packages={visiblePackages} bookings={visibleBookings} canEdit={canEdit} user={user} userProfile={userProfile} />
+        <StudentHistory bookings={visibleBookings} packages={visiblePackages} />
 
         <div className="mt-8 flex items-center justify-between">
           <button
@@ -1448,6 +2005,9 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
               className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400 md:max-w-sm"
             />
           </div>
+          {phoneEditStatus && (
+            <p className="mt-3 text-sm text-neutral-300">{phoneEditStatus}</p>
+          )}
         </div>
 
         <div className="mt-4 overflow-x-auto overflow-y-auto max-h-[600px] rounded-3xl border border-neutral-800">
@@ -1466,7 +2026,38 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
                   <td className="p-4 font-semibold text-lime-300">
                     {booking.name}
                   </td>
-                  <td className="p-4">{cleanTableValue(booking.phone) || "-"}</td>
+                  <td className="p-4">
+                    {editingPhoneBookingId === booking.id ? (
+                      <input
+                        autoFocus
+                        value={editingPhoneValue}
+                        onChange={(e) => setEditingPhoneValue(e.target.value)}
+                        onBlur={() => savePhoneEdit(booking)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            e.currentTarget.blur();
+                          }
+
+                          if (e.key === "Escape") {
+                            e.preventDefault();
+                            cancelPhoneEdit();
+                          }
+                        }}
+                        className="w-36 rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2 text-white outline-none focus:border-lime-400"
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => startPhoneEdit(booking)}
+                        disabled={!canEdit}
+                        className="rounded-lg px-2 py-1 text-left hover:bg-neutral-800 disabled:cursor-default disabled:hover:bg-transparent"
+                        title={canEdit ? "Click to edit phone number" : "Read only"}
+                      >
+                        {cleanTableValue(booking.phone) || "-"}
+                      </button>
+                    )}
+                  </td>
                   <td className="p-4">{booking.players}</td>
                   <td className="p-4">{booking.duration}</td>
                   <td className="p-4">{booking.location}</td>
@@ -1516,13 +2107,10 @@ export default function App() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [players, setPlayers] = useState(1);
-  const [duration, setDuration] = useState(1);
+  const [duration, setDuration] = useState("1");
   const [date, setDate] = useState(formatDate(new Date()));
   const [time, setTime] = useState("8:00 AM");
   const [location, setLocation] = useState("Tennis Nusa Duta");
-  const [paymentType, setPaymentType] = useState("pay_per_session");
-  const [selectedPackageType, setSelectedPackageType] = useState("four_sessions");
-  const [packageStartDate, setPackageStartDate] = useState(formatDate(new Date()));
   const [note, setNote] = useState("");
   const [bookings, setBookings] = useState([]);
   const [packages, setPackages] = useState([]);
@@ -1534,7 +2122,8 @@ export default function App() {
   const [status, setStatus] = useState("");
   const [calendarMonth, setCalendarMonth] = useState(new Date());
 
-  const price = useMemo(() => calculateCoachingFee(players, duration), [players, duration]);
+  const durationHours = getBookingDuration({ duration });
+  const price = useMemo(() => calculateCoachingFee(players, durationHours), [players, durationHours]);
 
   const reservedForSelectedDate = useMemo(() => {
     const dayRange = {
@@ -1550,13 +2139,10 @@ export default function App() {
     return allTimeSlots.filter(
       (slot) =>
         !isPastTimeSlot(date, slot) &&
-        !hasBookingOverlap(bookings, date, slot, duration)
+        !hasBookingOverlap(bookings, date, slot, durationHours)
     );
-  }, [bookings, date, duration]);
+  }, [bookings, date, durationHours]);
   const selectedBookingTime = availableSlots.includes(time) ? time : availableSlots[0] || "";
-  const activePackage = useMemo(() => {
-    return findActivePackage(packages, name);
-  }, [packages, name]);
 
   function refreshBookings() {
     setStatus("Bookings update automatically from Firebase.");
@@ -1675,15 +2261,11 @@ export default function App() {
       return;
     }
 
-    if (hasBookingOverlap(bookings, date, selectedBookingTime, duration)) {
+    if (hasBookingOverlap(bookings, date, selectedBookingTime, durationHours)) {
       setStatus("That slot is no longer available. Please choose another time.");
       return;
     }
 
-    const packageOption = getPackageOption(selectedPackageType);
-    let packageRecord = activePackage;
-    let packageRef = null;
-    let packageDeductedSessions = 0;
 
     const bookingData = {
       name,
@@ -1691,14 +2273,14 @@ export default function App() {
       date,
       time: selectedBookingTime,
       players,
-      duration,
+      duration: durationHours,
       location,
       coachingFee: price,
-      paymentStatus: paymentType === "package" ? "Package" : "Unpaid",
+      paymentStatus: "Unpaid",
       bookingStatus: "Confirmed",
       note,
       type: "booking",
-      paymentType,
+      paymentType: "pay_per_session",
       createdBy: "",
       coachName: "Coach Ilham",
       coachEmail: "",
@@ -1711,54 +2293,7 @@ export default function App() {
     setStatus("Saving booking...");
 
     try {
-      if (paymentType === "package") {
-        packageRef = await addDoc(collection(db, "packages"), {
-          studentName: name,
-          packageType: selectedPackageType,
-          packageLabel: packageOption.label,
-          totalSessions: packageOption.totalSessions,
-          usedSessions: 0,
-          remainingSessions: packageOption.totalSessions,
-          packageStartDate,
-          paymentAmount: packageOption.paymentAmount,
-          paymentStatus: "Unpaid",
-          status: "active",
-          createdBy: "",
-          coachName: "Coach Ilham",
-          coachEmail: "",
-          role: "public",
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-
-        packageRecord = {
-          id: packageRef.id,
-          totalSessions: packageOption.totalSessions,
-          usedSessions: 0,
-          remainingSessions: packageOption.totalSessions,
-        };
-      }
-
-      if (packageRecord) {
-        const packageDocRef = packageRef || doc(db, "packages", packageRecord.id);
-        const usedSessions = Number(packageRecord.usedSessions || 0);
-        const totalSessions = Number(packageRecord.totalSessions || 0);
-        packageDeductedSessions = Math.min(getBookingDuration({ duration }), Math.max(0, totalSessions - usedSessions));
-        const nextUsedSessions = Math.min(totalSessions, usedSessions + packageDeductedSessions);
-
-        await updateDoc(packageDocRef, {
-          usedSessions: nextUsedSessions,
-          remainingSessions: Math.max(0, totalSessions - nextUsedSessions),
-          updatedAt: serverTimestamp(),
-        });
-      }
-
-      const bookingRef = await addDoc(collection(db, "bookings"), {
-        ...bookingData,
-        packageId: packageRecord?.id || "",
-        packageType: packageRecord ? (paymentType === "package" ? selectedPackageType : packageRecord.packageType || "") : "",
-        packageDeductedSessions,
-      });
+      const bookingRef = await addDoc(collection(db, "bookings"), bookingData);
 
       if (shouldSendBookingNotification(bookingData)) {
         const notificationPayload = {
@@ -1767,7 +2302,7 @@ export default function App() {
           date,
           time: selectedBookingTime,
           players,
-          duration,
+          duration: durationHours,
           location,
           paymentStatus: bookingData.paymentStatus,
           note,
@@ -1806,7 +2341,7 @@ export default function App() {
 ` +
         `Players: ${players}
 ` +
-        `Duration: ${duration} hour(s)
+        `Duration: ${durationHours} hour(s)
 ` +
         `Location: ${location}
 ` +
@@ -1826,7 +2361,6 @@ export default function App() {
       setName("");
       setPhone("");
       setNote("");
-      setPaymentType("pay_per_session");
     } catch (error) {
       console.error(error);
       setStatus("Booking failed. Please WhatsApp Coach Ilham directly.");
@@ -1948,7 +2482,12 @@ export default function App() {
                     min="0.5"
                     step="0.5"
                     value={duration}
-                    onChange={(e) => setDuration(Number(e.target.value) || 1)}
+                    onChange={(e) => setDuration(e.target.value)}
+                    onBlur={() => {
+                      if (!duration || Number(duration) < 1) {
+                        setDuration("1");
+                      }
+                    }}
                     placeholder="1 hour"
                     className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 pr-20 outline-none focus:border-lime-400"
                   />
@@ -1960,31 +2499,6 @@ export default function App() {
 
               <textarea rows="4" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Notes" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
 
-              <select value={paymentType} onChange={(e) => setPaymentType(e.target.value)} className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
-                <option value="pay_per_session">Pay Per Session</option>
-                <option value="package">Package</option>
-              </select>
-
-              {paymentType === "package" && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <select value={selectedPackageType} onChange={(e) => setSelectedPackageType(e.target.value)} className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
-                    <option value="four_sessions">4 Sessions Package RM450</option>
-                    <option value="eight_sessions">8 Sessions Package RM800</option>
-                  </select>
-                  <input
-                    type="date"
-                    value={packageStartDate}
-                    onChange={(e) => setPackageStartDate(e.target.value)}
-                    className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400"
-                  />
-                </div>
-              )}
-
-              {activePackage && (
-                <p className="text-sm text-lime-300">
-                  {activePackage.studentName} Package: {activePackage.usedSessions || 0}/{activePackage.totalSessions} used, {getPackageRemainingSessions(activePackage)} remaining
-                </p>
-              )}
 
               <button onClick={submitBooking} disabled={loading || availableSlots.length === 0} className="w-full bg-white text-black rounded-2xl py-4 font-semibold hover:bg-neutral-200 transition disabled:opacity-50">
                 {loading ? "Please wait..." : "Book Now"}
