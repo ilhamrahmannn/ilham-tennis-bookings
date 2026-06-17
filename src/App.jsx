@@ -440,7 +440,9 @@ function canViewBookingForAdmin(booking, user, userProfile, selectedCoach) {
   const bookingCoachId = booking.coachId || booking.createdBy || "";
 
   if (role === roles.SUPER_ADMIN) {
-    return selectedCoach === "all" || bookingCoachId === selectedCoach;
+    if (!selectedCoach) return false;
+    if (bookingCoachId) return bookingCoachId === selectedCoach;
+    return selectedCoach === getCoachId(user, userProfile);
   }
 
   return Boolean(user?.uid) && (
@@ -1458,6 +1460,7 @@ function TransferSessionModal({ booking, coaches, user, userProfile, onClose }) 
       await updateDoc(doc(db, "bookings", booking.id), {
         coachId: targetCoach.coachId,
         coachName: targetCoach.coachName,
+        coachEmail: targetCoach.coachEmail || targetCoach.email || "",
         updatedAt: serverTimestamp(),
       });
 
@@ -1471,6 +1474,7 @@ function TransferSessionModal({ booking, coaches, user, userProfile, onClose }) 
         fromCoachName: booking.coachName || booking.coachEmail || "Unknown coach",
         toCoachId: targetCoach.coachId,
         toCoachName: targetCoach.coachName,
+        toCoachEmail: targetCoach.coachEmail || targetCoach.email || "",
         reason: reason.trim(),
         transferredBy: user?.uid || "",
         transferredByName: getCoachName(user, userProfile),
@@ -1514,7 +1518,7 @@ function TransferSessionModal({ booking, coaches, user, userProfile, onClose }) 
             <option value="">Transfer to...</option>
             {transferTargets.map((coach) => (
               <option key={coach.coachId} value={coach.coachId}>
-                {coach.coachName}
+                {coach.coachName || coach.name || coach.email || coach.coachId}
               </option>
             ))}
           </select>
@@ -1587,6 +1591,8 @@ function PendingCoachApprovals({ users, user }) {
       coachId: coachUser.uid,
       coachName: coachUser.name || coachUser.email,
       phone: coachUser.phone || "",
+      role: roles.COACH,
+      status: "active",
       active: true,
       color: coachUser.color || "",
       email: coachUser.email || "",
@@ -1636,7 +1642,7 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginStatus, setLoginStatus] = useState("");
-  const [selectedCoach, setSelectedCoach] = useState("all");
+  const [selectedCoach, setSelectedCoach] = useState("");
 
   const [blockStartDate, setBlockStartDate] = useState(formatDate(new Date()));
   const [blockEndDate, setBlockEndDate] = useState(formatDate(new Date()));
@@ -1668,9 +1674,15 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
   }, [packages, selectedCoach, user, userProfile]);
   const coachOptions = useMemo(() => {
     const coachMap = new Map();
+    const currentCoachId = getCoachId(user, userProfile);
+
+    if (currentCoachId) {
+      coachMap.set(currentCoachId, getCoachName(user, userProfile));
+    }
 
     coaches.forEach((coach) => {
       if (!coach.coachId) return;
+      if (coach.active === false) return;
       coachMap.set(coach.coachId, coach.coachName || coach.coachId);
     });
 
@@ -1683,7 +1695,17 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
     });
 
     return Array.from(coachMap.entries()).map(([uid, label]) => ({ uid, label }));
-  }, [bookings, coaches]);
+  }, [bookings, coaches, user, userProfile]);
+
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    if (coachOptions.length === 0) return;
+    if (coachOptions.some((coach) => coach.uid === selectedCoach)) return;
+
+    const ownCoachId = getCoachId(user, userProfile);
+    const ownOption = coachOptions.find((coach) => coach.uid === ownCoachId);
+    setSelectedCoach(ownOption?.uid || coachOptions[0].uid);
+  }, [coachOptions, isSuperAdmin, selectedCoach, user, userProfile]);
 
   const adminWeekRange = getPeriodRange("week", adminWeekDate);
   const adminWeekEndDate = new Date(adminWeekRange.end);
@@ -1838,10 +1860,12 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
       return;
     }
 
+    const bookingOwnerId = booking?.coachId || booking?.createdBy || "";
+
     if (
       userRole !== roles.SUPER_ADMIN &&
-      booking?.createdBy &&
-      booking.createdBy !== user?.uid
+      bookingOwnerId &&
+      ![user?.uid, userProfile?.coachId].includes(bookingOwnerId)
     ) {
       alert("You can only edit your own bookings.");
       return;
@@ -1855,12 +1879,17 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
     }
 
     if (!text) return;
-    if (!booking?.id && hasBookingOverlap(bookings, date, time, 1)) {
+    if (!booking?.id && hasBookingOverlap(visibleBookings, date, time, 1)) {
       alert("That slot is already reserved.");
       return;
     }
 
     const isBlocked = containsUnavailableText(text);
+    const selectedCoachOption = coachOptions.find((coach) => coach.uid === selectedCoach);
+    const targetCoachId = isSuperAdmin ? selectedCoach : getCoachId(user, userProfile);
+    const targetCoachName = isSuperAdmin
+      ? selectedCoachOption?.label || getCoachName(user, userProfile)
+      : getCoachName(user, userProfile);
 
     const scheduleData = {
       name: isBlocked ? "Blocked" : text,
@@ -1880,9 +1909,9 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
       packageType: booking?.packageType || "",
       packageDeductedSessions: booking?.packageDeductedSessions || 0,
       createdBy: booking?.createdBy || user?.uid || "",
-      coachId: booking?.coachId || getCoachId(user, userProfile),
-      coachName: booking?.coachName || getCoachName(user, userProfile),
-      coachEmail: booking?.coachEmail || getCoachEmail(user, userProfile),
+      coachId: booking?.coachId || targetCoachId,
+      coachName: booking?.coachName || targetCoachName,
+      coachEmail: booking?.coachEmail || (!isSuperAdmin ? getCoachEmail(user, userProfile) : ""),
       role: userRole,
       updatedAt: serverTimestamp(),
     };
@@ -1912,6 +1941,11 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
 
       const startIndex = allTimeSlots.indexOf(blockStartTime);
       const endIndex = allTimeSlots.indexOf(blockEndTime);
+      const selectedCoachOption = coachOptions.find((coach) => coach.uid === selectedCoach);
+      const targetCoachId = isSuperAdmin ? selectedCoach : getCoachId(user, userProfile);
+      const targetCoachName = isSuperAdmin
+        ? selectedCoachOption?.label || getCoachName(user, userProfile)
+        : getCoachName(user, userProfile);
 
       for (
         let current = new Date(startDate);
@@ -1924,7 +1958,7 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
           const selectedTime = allTimeSlots[i];
 
           if (!selectedTime) continue;
-          if (hasBookingOverlap(bookings, currentDate, selectedTime, 1)) continue;
+          if (hasBookingOverlap(visibleBookings, currentDate, selectedTime, 1)) continue;
 
           await addDoc(collection(db, "bookings"), {
             name: "Blocked",
@@ -1940,9 +1974,9 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
             note: blockNote || "NA",
             type: "blocked",
             createdBy: user?.uid || "",
-            coachId: getCoachId(user, userProfile),
-            coachName: getCoachName(user, userProfile),
-            coachEmail: getCoachEmail(user, userProfile),
+            coachId: targetCoachId,
+            coachName: targetCoachName,
+            coachEmail: !isSuperAdmin ? getCoachEmail(user, userProfile) : "",
             role: userRole,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
@@ -2059,6 +2093,38 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
     );
   }
 
+  if (userProfile?.status === "pending" || userProfile?.role === roles.PENDING_COACH) {
+    return (
+      <div className="min-h-screen bg-neutral-950 text-white flex items-center justify-center px-5">
+        <div className="w-full max-w-lg rounded-3xl border border-neutral-800 bg-neutral-900 p-8 text-center">
+          <h1 className="text-3xl font-bold">Pending Approval</h1>
+          <p className="mt-3 text-neutral-300">
+            Your account is pending approval by Super Admin.
+          </p>
+          <button onClick={logoutAdmin} className="mt-6 rounded-2xl bg-neutral-800 px-5 py-3 font-semibold">
+            Logout
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (userProfile?.status === "rejected") {
+    return (
+      <div className="min-h-screen bg-neutral-950 text-white flex items-center justify-center px-5">
+        <div className="w-full max-w-lg rounded-3xl border border-neutral-800 bg-neutral-900 p-8 text-center">
+          <h1 className="text-3xl font-bold">Access Rejected</h1>
+          <p className="mt-3 text-neutral-300">
+            Your coach access request was rejected. Please contact Super Admin.
+          </p>
+          <button onClick={logoutAdmin} className="mt-6 rounded-2xl bg-neutral-800 px-5 py-3 font-semibold">
+            Logout
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-neutral-950 text-white px-5 py-10">
       <div className="max-w-6xl mx-auto">
@@ -2083,7 +2149,6 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
                 }}
                 className="rounded-2xl bg-neutral-900 border border-neutral-700 px-4 py-3 text-sm"
               >
-                <option value="all">All coaches</option>
                 {coachOptions.map((coach) => (
                   <option key={coach.uid} value={coach.uid}>
                     {coach.label}
@@ -2406,6 +2471,7 @@ export default function App() {
   const [date, setDate] = useState(formatDate(new Date()));
   const [time, setTime] = useState("8:00 AM");
   const [location, setLocation] = useState("Tennis Nusa Duta");
+  const [selectedCoachId, setSelectedCoachId] = useState("");
   const [note, setNote] = useState("");
   const [bookings, setBookings] = useState([]);
   const [packages, setPackages] = useState([]);
@@ -2422,29 +2488,80 @@ export default function App() {
 
   const durationHours = getBookingDuration({ duration });
   const price = useMemo(() => calculateCoachingFee(players, durationHours), [players, durationHours]);
+  const selectedCoachBookings = useMemo(() => {
+    if (!selectedCoachId) return [];
+
+    const selectedCoachRecord = coaches.find((coach) => coach.coachId === selectedCoachId);
+    const isSelectedSuperAdmin = selectedCoachRecord?.role === roles.SUPER_ADMIN;
+
+    return bookings.filter((booking) => {
+      const bookingCoachId = String(booking.coachId || booking.createdBy || "");
+
+      if (bookingCoachId) return bookingCoachId === selectedCoachId;
+
+      return isSelectedSuperAdmin;
+    });
+  }, [bookings, coaches, selectedCoachId]);
 
   const reservedForSelectedDate = useMemo(() => {
+    if (!selectedCoachId) return [];
+
     const dayRange = {
       start: parseBookingDate(date),
       end: parseBookingDate(date),
     };
     dayRange.end.setDate(dayRange.end.getDate() + 1);
 
-    return getExpandedReservedSlots(bookings, dayRange);
-  }, [bookings, date]);
+    return getExpandedReservedSlots(selectedCoachBookings, dayRange);
+  }, [date, selectedCoachBookings, selectedCoachId]);
 
   const availableSlots = useMemo(() => {
+    if (!selectedCoachId) return [];
+
     return allTimeSlots.filter(
       (slot) =>
         !isPastTimeSlot(date, slot) &&
-        !hasBookingOverlap(bookings, date, slot, durationHours)
+        !hasBookingOverlap(selectedCoachBookings, date, slot, durationHours)
     );
-  }, [bookings, date, durationHours]);
+  }, [date, durationHours, selectedCoachBookings, selectedCoachId]);
   const selectedBookingTime = availableSlots.includes(time) ? time : availableSlots[0] || "";
+  const publicCoachOptions = useMemo(() => {
+    const coachesById = new Map();
+
+    coaches.forEach((coach) => {
+      if (![roles.COACH, roles.SUPER_ADMIN].includes(coach.role)) return;
+      if (coach.status !== "active") return;
+      if (coach.active !== true) return;
+      if (!coach.coachId) return;
+      if (!coachesById.has(coach.coachId)) {
+        coachesById.set(coach.coachId, {
+          coachId: coach.coachId,
+          coachName: coach.coachName || coach.name || coach.email || coach.coachId || "Coach",
+          coachEmail: coach.coachEmail || coach.email || "",
+        });
+      }
+    });
+
+    return Array.from(coachesById.values()).sort((a, b) => {
+      return String(a.coachName || "").localeCompare(String(b.coachName || ""));
+    });
+  }, [coaches]);
+  const selectedCoach = publicCoachOptions.find((coach) => coach.coachId === selectedCoachId) || null;
 
   function refreshBookings() {
     setStatus("Bookings update automatically from Firebase.");
   }
+
+  useEffect(() => {
+    if (availableSlots.length === 0) {
+      setTime("");
+      return;
+    }
+
+    if (!availableSlots.includes(time)) {
+      setTime(availableSlots[0]);
+    }
+  }, [availableSlots, time]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (nextUser) => {
@@ -2655,12 +2772,12 @@ export default function App() {
   }, []);
 
   async function submitBooking() {
-    if (!name || !phone || !date || !selectedBookingTime) {
-      setStatus("Please fill in name, phone, date and time.");
+    if (!name || !phone || !date || !selectedBookingTime || !selectedCoach) {
+      setStatus("Please fill in name, phone, date, time and coach.");
       return;
     }
 
-    if (hasBookingOverlap(bookings, date, selectedBookingTime, durationHours)) {
+    if (hasBookingOverlap(selectedCoachBookings, date, selectedBookingTime, durationHours)) {
       setStatus("That slot is no longer available. Please choose another time.");
       return;
     }
@@ -2681,9 +2798,9 @@ export default function App() {
       type: "booking",
       paymentType: "pay_per_session",
       createdBy: "",
-      coachId: "",
-      coachName: "Coach Ilham",
-      coachEmail: "",
+      coachId: selectedCoach.coachId,
+      coachName: selectedCoach.coachName,
+      coachEmail: selectedCoach.coachEmail,
       role: "public",
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -2739,6 +2856,8 @@ export default function App() {
 ` +
         `Time: ${selectedBookingTime}
 ` +
+        `Coach: ${selectedCoach.coachName}
+` +
         `Players: ${players}
 ` +
         `Duration: ${durationHours} hour(s)
@@ -2760,6 +2879,7 @@ export default function App() {
 
       setName("");
       setPhone("");
+      setSelectedCoachId("");
       setNote("");
     } catch (error) {
       console.error(error);
@@ -2774,13 +2894,15 @@ export default function App() {
 
   function getDateStatus(day) {
     if (!day) return null;
+    if (!selectedCoachId) return "Select coach";
+
     const dayString = formatDate(day);
     const dayRange = {
       start: parseBookingDate(dayString),
       end: parseBookingDate(dayString),
     };
     dayRange.end.setDate(dayRange.end.getDate() + 1);
-    const bookedCount = getExpandedReservedSlots(bookings, dayRange).length;
+    const bookedCount = getExpandedReservedSlots(selectedCoachBookings, dayRange).length;
 
     if (bookedCount >= allTimeSlots.length) return "full";
     if (bookedCount > 0) return `${allTimeSlots.length - bookedCount} slots left`;
@@ -2801,38 +2923,6 @@ export default function App() {
         userProfile={adminProfile}
         authLoading={authLoading}
       />
-    );
-  }
-
-  if (userProfile?.status === "pending" || userProfile?.role === roles.PENDING_COACH) {
-    return (
-      <div className="min-h-screen bg-neutral-950 text-white flex items-center justify-center px-5">
-        <div className="w-full max-w-lg rounded-3xl border border-neutral-800 bg-neutral-900 p-8 text-center">
-          <h1 className="text-3xl font-bold">Pending Approval</h1>
-          <p className="mt-3 text-neutral-300">
-            Your account is pending approval by Super Admin.
-          </p>
-          <button onClick={logoutAdmin} className="mt-6 rounded-2xl bg-neutral-800 px-5 py-3 font-semibold">
-            Logout
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (userProfile?.status === "rejected") {
-    return (
-      <div className="min-h-screen bg-neutral-950 text-white flex items-center justify-center px-5">
-        <div className="w-full max-w-lg rounded-3xl border border-neutral-800 bg-neutral-900 p-8 text-center">
-          <h1 className="text-3xl font-bold">Access Rejected</h1>
-          <p className="mt-3 text-neutral-300">
-            Your coach access request was rejected. Please contact Super Admin.
-          </p>
-          <button onClick={logoutAdmin} className="mt-6 rounded-2xl bg-neutral-800 px-5 py-3 font-semibold">
-            Logout
-          </button>
-        </div>
-      </div>
     );
   }
 
@@ -2887,10 +2977,22 @@ export default function App() {
             <div className="space-y-4">
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your Name" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
               <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone Number" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
+              <select
+                value={selectedCoachId}
+                onChange={(e) => setSelectedCoachId(e.target.value)}
+                className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400"
+              >
+                <option value="">Select Coach</option>
+                {publicCoachOptions.map((coach) => (
+                  <option key={coach.coachId} value={coach.coachId}>
+                    {coach.coachName}
+                  </option>
+                ))}
+              </select>
               <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
 
-              <select value={selectedBookingTime} onChange={(e) => setTime(e.target.value)} disabled={availableSlots.length === 0} className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
-                {availableSlots.length === 0 ? <option>No available slots</option> : availableSlots.map((slot) => <option key={slot}>{slot}</option>)}
+              <select value={selectedBookingTime} onChange={(e) => setTime(e.target.value)} disabled={!selectedCoachId || availableSlots.length === 0} className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
+                {!selectedCoachId ? <option>Please select coach first</option> : availableSlots.length === 0 ? <option>No available slots</option> : availableSlots.map((slot) => <option key={slot}>{slot}</option>)}
               </select>
 
               {reservedForSelectedDate.length > 0 && (
@@ -2935,7 +3037,7 @@ export default function App() {
               <textarea rows="4" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Notes" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
 
 
-              <button onClick={submitBooking} disabled={loading || availableSlots.length === 0} className="w-full bg-white text-black rounded-2xl py-4 font-semibold hover:bg-neutral-200 transition disabled:opacity-50">
+              <button onClick={submitBooking} disabled={loading || !selectedCoachId || availableSlots.length === 0} className="w-full bg-white text-black rounded-2xl py-4 font-semibold hover:bg-neutral-200 transition disabled:opacity-50">
                 {loading ? "Please wait..." : "Book Now"}
               </button>
 
@@ -2995,7 +3097,7 @@ export default function App() {
             </div>
 
             <WeeklySchedule
-              bookings={bookings}
+              bookings={selectedCoachBookings}
               selectedDate={date}
               onSelectDate={setDate}
               className="min-h-[600px] flex flex-col"
