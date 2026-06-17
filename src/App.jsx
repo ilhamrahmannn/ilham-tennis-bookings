@@ -391,7 +391,24 @@ function formatStatsMonth(date) {
 
 function getScheduleCellText(booking) {
   if (!booking) return "";
+  if (isUnavailableBooking(booking)) return "";
   return booking.name || booking.note || "Booked";
+}
+
+function isUnavailableBooking(booking) {
+  if (!booking) return false;
+
+  const type = String(booking.type || booking.bookingType || "").trim().toLowerCase();
+  const status = String(booking.bookingStatus || booking.status || "").trim().toLowerCase();
+
+  return (
+    type === "blocked" ||
+    status === "blocked" ||
+    containsUnavailableText(booking.name) ||
+    containsUnavailableText(booking.note) ||
+    containsUnavailableText(booking.type) ||
+    containsUnavailableText(booking.bookingType)
+  );
 }
 
 function getUserRole(userProfile) {
@@ -506,9 +523,7 @@ function WeeklySchedule({
 
   const { weekDays, slotBookingsByKey } = useMemo(() => {
     const weekRange = getPeriodRange("week", selectedDate);
-    const expandedSlots = editable
-      ? getExpandedReservedSlots(bookings, weekRange)
-      : getExpandedValidBookingSlots(bookings, weekRange);
+    const expandedSlots = getExpandedReservedSlots(bookings, weekRange);
     const days = Array.from({ length: 7 }, (_, i) => {
       const d = new Date(weekRange.start);
       d.setDate(weekRange.start.getDate() + i);
@@ -610,9 +625,12 @@ function WeeklySchedule({
                 const shouldDimPast = isPastSlot && !editable;
                 const isEditing = isEditingCell(dateString, slot);
                 const isSaving = savingCellKey === cellKey;
+                const isUnavailableCell = isUnavailableBooking(booking);
                 const cellText = getScheduleCellText(booking);
                 const cellClassName = `relative min-h-14 p-3 text-left text-sm border-r border-neutral-800 transition ${shouldDimPast
                   ? "opacity-30 cursor-not-allowed text-neutral-600 bg-neutral-950"
+                  : isUnavailableCell
+                  ? "bg-neutral-700/80 text-transparent"
                   : booking
                   ? "text-black bg-lime-400 font-semibold"
                   : "text-neutral-500 hover:bg-neutral-800"
@@ -662,8 +680,8 @@ function WeeklySchedule({
                       }}
                       className={`${cellClassName} cursor-text`}
                     >
-                      <span>{isSaving ? "Saving..." : cellText}</span>
-                      {booking && (
+                      <span>{isUnavailableCell ? "" : isSaving ? "Saving..." : cellText}</span>
+                      {booking && !isUnavailableCell && (
                         <button
                           type="button"
                           onClick={(e) => {
@@ -688,7 +706,7 @@ function WeeklySchedule({
                     }}
                     className={cellClassName}
                   >
-                    {shouldDimPast ? "" : cellText}
+                    {shouldDimPast || isUnavailableCell ? "" : cellText}
                   </button>
                 );
               })}
@@ -2382,7 +2400,7 @@ export default function App() {
     dayRange.end.setDate(dayRange.end.getDate() + 1);
     const bookedCount = getExpandedReservedSlots(bookings, dayRange).length;
 
-    if (bookedCount >= allTimeSlots.length) return "Full";
+    if (bookedCount >= allTimeSlots.length) return "full";
     if (bookedCount > 0) return `${allTimeSlots.length - bookedCount} slots left`;
     return "Available";
   }
@@ -2524,6 +2542,7 @@ export default function App() {
                 {monthDays.map((day, index) => {
                   const dayString = day ? formatDate(day) : "";
                   const dayStatus = getDateStatus(day);
+                  const isFullDay = dayStatus === "full";
                   const isSelected = dayString === date;
                   const today = new Date();
                   today.setHours(0, 0, 0, 0);
@@ -2544,10 +2563,12 @@ export default function App() {
                     >
                       {day && (
                         <>
-                          <div className="font-semibold">{day.getDate()}</div>
-                          <div className={`mt-2 text-[10px] ${isSelected ? "text-black" : dayStatus === "Full" ? "text-red-400" : "text-lime-300"}`}>
-                            {dayStatus}
-                          </div>
+                          <div className={`font-semibold ${isFullDay ? "line-through decoration-2" : ""}`}>{day.getDate()}</div>
+                          {!isFullDay && (
+                            <div className={`mt-2 text-[10px] ${isSelected ? "text-black" : "text-lime-300"}`}>
+                              {dayStatus}
+                            </div>
+                          )}
                         </>
                       )}
                     </button>
