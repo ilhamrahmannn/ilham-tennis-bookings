@@ -1,6 +1,6 @@
 import coachImage from "./assets/ilham.jpg";
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
-import { addDoc, collection, deleteDoc, doc, getDoc, onSnapshot, serverTimestamp, updateDoc } from "firebase/firestore";
+import { GoogleAuthProvider, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, signOut } from "firebase/auth";
+import { addDoc, collection, deleteDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
 import { Bell } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { auth, db } from "./firebase";
@@ -9,6 +9,7 @@ const roles = {
   SUPER_ADMIN: "super_admin",
   COACH: "coach",
   VIEWER: "viewer",
+  PENDING_COACH: "pending_coach",
 };
 
 
@@ -419,22 +420,34 @@ function getCoachName(user, userProfile) {
   return userProfile?.coachName || user?.displayName || user?.email || "Coach";
 }
 
+function getCoachId(user, userProfile) {
+  return userProfile?.coachId || user?.uid || "";
+}
+
 function getCoachEmail(user, userProfile) {
   return userProfile?.coachEmail || user?.email || "";
 }
 
 function canEditAdminData(userProfile) {
-  return [roles.SUPER_ADMIN, roles.COACH].includes(getUserRole(userProfile));
+  return (
+    [roles.SUPER_ADMIN, roles.COACH].includes(getUserRole(userProfile)) &&
+    String(userProfile?.status || "active") === "active"
+  );
 }
 
 function canViewBookingForAdmin(booking, user, userProfile, selectedCoach) {
   const role = getUserRole(userProfile);
+  const bookingCoachId = booking.coachId || booking.createdBy || "";
 
   if (role === roles.SUPER_ADMIN) {
-    return selectedCoach === "all" || booking.createdBy === selectedCoach;
+    return selectedCoach === "all" || bookingCoachId === selectedCoach;
   }
 
-  return Boolean(user?.uid) && booking.createdBy === user.uid;
+  return Boolean(user?.uid) && (
+    bookingCoachId === user.uid ||
+    bookingCoachId === userProfile?.coachId ||
+    (!bookingCoachId && booking.coachName === getCoachName(user, userProfile))
+  );
 }
 
 function getBookingCoachLabel(booking) {
@@ -480,6 +493,7 @@ function getDefaultAdminProfile(user) {
   if (email === "ilham@ilham-booking.local") {
     return {
       role: roles.SUPER_ADMIN,
+      coachId: user?.uid || "",
       coachName: "ILHAM",
       coachEmail: email,
     };
@@ -488,6 +502,7 @@ function getDefaultAdminProfile(user) {
   if (email === "zayn@ilham-booking.local") {
     return {
       role: roles.COACH,
+      coachId: user?.uid || "",
       coachName: "zayn",
       coachEmail: email,
     };
@@ -496,6 +511,7 @@ function getDefaultAdminProfile(user) {
   if (email === "khalis@ilham-booking.local") {
     return {
       role: roles.COACH,
+      coachId: user?.uid || "",
       coachName: "khalis",
       coachEmail: email,
     };
@@ -503,6 +519,7 @@ function getDefaultAdminProfile(user) {
 
   return {
     role: roles.VIEWER,
+    coachId: user?.uid || "",
     coachName: user?.displayName || username,
     coachEmail: email,
   };
@@ -1419,7 +1436,203 @@ function NotificationCenter({ notifications }) {
   );
 }
 
-function AdminDashboard({ bookings, packages, notifications, onRefresh, user, userProfile, authLoading }) {
+function TransferSessionModal({ booking, coaches, user, userProfile, onClose }) {
+  const [selectedCoachId, setSelectedCoachId] = useState("");
+  const [reason, setReason] = useState("");
+  const [status, setStatus] = useState("");
+
+  const activeCoaches = coaches.filter((coach) => coach.active !== false);
+  const currentCoachId = booking?.coachId || booking?.createdBy || "";
+  const transferTargets = activeCoaches.filter((coach) => coach.coachId !== currentCoachId);
+
+  async function confirmTransfer() {
+    const targetCoach = activeCoaches.find((coach) => coach.coachId === selectedCoachId);
+    if (!booking?.id || !targetCoach) {
+      setStatus("Please choose a coach.");
+      return;
+    }
+
+    try {
+      setStatus("Transferring session...");
+
+      await updateDoc(doc(db, "bookings", booking.id), {
+        coachId: targetCoach.coachId,
+        coachName: targetCoach.coachName,
+        updatedAt: serverTimestamp(),
+      });
+
+      await addDoc(collection(db, "transferLogs"), {
+        bookingId: booking.id,
+        customerName: booking.name || "",
+        date: booking.date || "",
+        time: booking.time || "",
+        duration: getBookingDuration(booking),
+        fromCoachId: currentCoachId,
+        fromCoachName: booking.coachName || booking.coachEmail || "Unknown coach",
+        toCoachId: targetCoach.coachId,
+        toCoachName: targetCoach.coachName,
+        reason: reason.trim(),
+        transferredBy: user?.uid || "",
+        transferredByName: getCoachName(user, userProfile),
+        transferredByRole: getUserRole(userProfile),
+        createdAt: serverTimestamp(),
+      });
+
+      setStatus("Session transferred.");
+      onClose();
+    } catch (error) {
+      console.error(error);
+      setStatus(`Transfer failed: ${error.message || "Please check Firestore rules."}`);
+    }
+  }
+
+  if (!booking) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="w-full max-w-lg rounded-3xl border border-neutral-800 bg-neutral-950 p-6 shadow-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-semibold">Transfer Session</h2>
+            <p className="mt-2 text-sm text-neutral-400">
+              {booking.name} · {booking.date} · {booking.time}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-xl bg-neutral-800 px-3 py-2">Close</button>
+        </div>
+
+        <div className="mt-5 space-y-4">
+          <div className="rounded-2xl bg-neutral-900 p-4 text-sm text-neutral-300">
+            From: <span className="font-semibold text-white">{booking.coachName || booking.coachEmail || "Unknown coach"}</span>
+          </div>
+
+          <select
+            value={selectedCoachId}
+            onChange={(e) => setSelectedCoachId(e.target.value)}
+            className="w-full rounded-2xl border border-neutral-700 bg-neutral-800 px-4 py-3 outline-none focus:border-lime-400"
+          >
+            <option value="">Transfer to...</option>
+            {transferTargets.map((coach) => (
+              <option key={coach.coachId} value={coach.coachId}>
+                {coach.coachName}
+              </option>
+            ))}
+          </select>
+
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Reason e.g. Coach unavailable"
+            className="w-full rounded-2xl border border-neutral-700 bg-neutral-800 px-4 py-3 outline-none focus:border-lime-400"
+          />
+
+          <button
+            type="button"
+            onClick={confirmTransfer}
+            className="w-full rounded-2xl bg-lime-400 px-5 py-3 font-semibold text-black"
+          >
+            Confirm Transfer
+          </button>
+
+          {status && <p className="text-sm text-neutral-300">{status}</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TransferLogs({ logs }) {
+  return (
+    <div className="mt-8 rounded-3xl border border-neutral-800 bg-neutral-900 p-6">
+      <h2 className="text-2xl font-semibold">Transfer Logs</h2>
+      <div className="mt-5 space-y-3">
+        {logs.slice(0, 10).map((log) => (
+          <div key={log.id} className="rounded-2xl bg-neutral-950 p-4 text-sm text-neutral-300">
+            <div className="font-semibold text-white">
+              {log.date} {log.time} · {log.customerName || "Session"}
+            </div>
+            <div className="mt-2">
+              Transferred by {log.transferredByName || "Super Admin"} from {log.fromCoachName || "-"} to {log.toCoachName || "-"}.
+            </div>
+            {log.reason && <div className="mt-1 text-neutral-400">Reason: {log.reason}</div>}
+          </div>
+        ))}
+        {logs.length === 0 && (
+          <p className="rounded-2xl bg-neutral-950 p-4 text-sm text-neutral-400">No transfer logs yet.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PendingCoachApprovals({ users, user }) {
+  const pendingUsers = users.filter((adminUser) => {
+    return adminUser.role === roles.PENDING_COACH && adminUser.status === "pending";
+  });
+
+  async function approveCoach(coachUser) {
+    await updateDoc(doc(db, "users", coachUser.uid), {
+      role: roles.COACH,
+      status: "active",
+      active: true,
+      coachId: coachUser.uid,
+      coachName: coachUser.name || coachUser.coachName || coachUser.email,
+      coachEmail: coachUser.email || "",
+      approvedAt: serverTimestamp(),
+      approvedBy: user?.uid || "",
+      updatedAt: serverTimestamp(),
+    });
+
+    await setDoc(doc(db, "coaches", coachUser.uid), {
+      coachId: coachUser.uid,
+      coachName: coachUser.name || coachUser.email,
+      phone: coachUser.phone || "",
+      active: true,
+      color: coachUser.color || "",
+      email: coachUser.email || "",
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+  }
+
+  async function rejectCoach(coachUser) {
+    await updateDoc(doc(db, "users", coachUser.uid), {
+      status: "rejected",
+      active: false,
+      rejectedAt: serverTimestamp(),
+      rejectedBy: user?.uid || "",
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  return (
+    <div className="mt-8 rounded-3xl border border-neutral-800 bg-neutral-900 p-6">
+      <h2 className="text-2xl font-semibold">Pending Coach Approvals</h2>
+      <div className="mt-5 space-y-3">
+        {pendingUsers.map((coachUser) => (
+          <div key={coachUser.uid} className="flex flex-col gap-3 rounded-2xl bg-neutral-950 p-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <div className="font-semibold text-white">{coachUser.name || coachUser.email}</div>
+              <div className="text-sm text-neutral-400">{coachUser.email}</div>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => approveCoach(coachUser)} className="rounded-xl bg-lime-400 px-4 py-2 text-sm font-semibold text-black">
+                Approve Coach
+              </button>
+              <button type="button" onClick={() => rejectCoach(coachUser)} className="rounded-xl bg-red-500/80 px-4 py-2 text-sm font-semibold text-white">
+                Reject
+              </button>
+            </div>
+          </div>
+        ))}
+        {pendingUsers.length === 0 && (
+          <p className="rounded-2xl bg-neutral-950 p-4 text-sm text-neutral-400">No pending coach approvals.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AdminDashboard({ bookings, packages, notifications, coaches, transferLogs, users, onRefresh, user, userProfile, authLoading }) {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginStatus, setLoginStatus] = useState("");
@@ -1437,6 +1650,7 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
   const [editingPhoneBookingId, setEditingPhoneBookingId] = useState("");
   const [editingPhoneValue, setEditingPhoneValue] = useState("");
   const [phoneEditStatus, setPhoneEditStatus] = useState("");
+  const [transferBooking, setTransferBooking] = useState(null);
   const [adminWeekDate, setAdminWeekDate] = useState(formatDate(new Date()));
   const rowsPerPage = 10;
   const userRole = getUserRole(userProfile);
@@ -1453,15 +1667,23 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
     );
   }, [packages, selectedCoach, user, userProfile]);
   const coachOptions = useMemo(() => {
-    const coaches = new Map();
+    const coachMap = new Map();
 
-    bookings.forEach((booking) => {
-      if (!booking.createdBy) return;
-      coaches.set(booking.createdBy, getBookingCoachLabel(booking));
+    coaches.forEach((coach) => {
+      if (!coach.coachId) return;
+      coachMap.set(coach.coachId, coach.coachName || coach.coachId);
     });
 
-    return Array.from(coaches.entries()).map(([uid, label]) => ({ uid, label }));
-  }, [bookings]);
+    bookings.forEach((booking) => {
+      const bookingCoachId = booking.coachId || booking.createdBy;
+      if (!bookingCoachId) return;
+      if (!coachMap.has(bookingCoachId)) {
+        coachMap.set(bookingCoachId, getBookingCoachLabel(booking));
+      }
+    });
+
+    return Array.from(coachMap.entries()).map(([uid, label]) => ({ uid, label }));
+  }, [bookings, coaches]);
 
   const adminWeekRange = getPeriodRange("week", adminWeekDate);
   const adminWeekEndDate = new Date(adminWeekRange.end);
@@ -1542,12 +1764,18 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
     ["players", "Players"],
     ["duration", "Duration"],
     ["location", "Location"],
+    ["coachName", "Coach"],
     ["paymentStatus", "Payment"],
     ["bookingStatus", "Status"],
     ["note", "Note"],
+    ["actions", "Actions"],
   ];
 
   function renderSortableHeader(key, label) {
+    if (key === "actions") {
+      return <th key={key} className="p-4 text-left">{label}</th>;
+    }
+
     const isActive = bookingSort.key === key;
     const directionLabel = bookingSort.direction === "asc" ? "A-Z" : "Z-A";
 
@@ -1652,6 +1880,7 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
       packageType: booking?.packageType || "",
       packageDeductedSessions: booking?.packageDeductedSessions || 0,
       createdBy: booking?.createdBy || user?.uid || "",
+      coachId: booking?.coachId || getCoachId(user, userProfile),
       coachName: booking?.coachName || getCoachName(user, userProfile),
       coachEmail: booking?.coachEmail || getCoachEmail(user, userProfile),
       role: userRole,
@@ -1711,6 +1940,7 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
             note: blockNote || "NA",
             type: "blocked",
             createdBy: user?.uid || "",
+            coachId: getCoachId(user, userProfile),
             coachName: getCoachName(user, userProfile),
             coachEmail: getCoachEmail(user, userProfile),
             role: userRole,
@@ -1758,6 +1988,19 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
     }
   }
 
+  async function loginWithGoogle() {
+    setLoginStatus("Signing in with Google...");
+
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+      setLoginStatus("");
+    } catch (error) {
+      console.error(error);
+      setLoginStatus(`Google sign-in failed: ${error.message}`);
+    }
+  }
+
   async function logoutAdmin() {
     await signOut(auth);
   }
@@ -1798,6 +2041,14 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
             className="mt-4 w-full bg-lime-400 text-black rounded-2xl py-4 font-semibold"
           >
             Login
+          </button>
+
+          <button
+            type="button"
+            onClick={loginWithGoogle}
+            className="mt-3 w-full rounded-2xl border border-neutral-700 bg-white px-4 py-4 font-semibold text-black"
+          >
+            Sign in with Google
           </button>
 
           {loginStatus && (
@@ -1900,6 +2151,8 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
           ))}
         </div>
 
+        {isSuperAdmin && <PendingCoachApprovals users={users} user={user} />}
+
         {canEdit ? (
           <div className="mt-8 bg-neutral-900 border border-neutral-800 rounded-3xl p-6">
             <h2 className="text-2xl font-semibold">Manual Block Slot</h2>
@@ -1972,6 +2225,7 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
 
         <PackageTracker packages={visiblePackages} bookings={visibleBookings} canEdit={canEdit} user={user} userProfile={userProfile} />
         <StudentHistory bookings={visibleBookings} packages={visiblePackages} />
+        {isSuperAdmin && <TransferLogs logs={transferLogs} />}
 
         <div className="mt-8 flex items-center justify-between">
           <button
@@ -2079,9 +2333,23 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
                   <td className="p-4">{booking.players}</td>
                   <td className="p-4">{booking.duration}</td>
                   <td className="p-4">{booking.location}</td>
+                  <td className="p-4">{booking.coachName || booking.coachEmail || "-"}</td>
                   <td className="p-4">{booking.paymentStatus}</td>
                   <td className="p-4">{booking.bookingStatus}</td>
                   <td className="p-4">{booking.note}</td>
+                  <td className="p-4">
+                    {isSuperAdmin ? (
+                      <button
+                        type="button"
+                        onClick={() => setTransferBooking(booking)}
+                        className="rounded-xl bg-neutral-800 px-3 py-2 text-xs hover:bg-neutral-700"
+                      >
+                        Transfer Session
+                      </button>
+                    ) : (
+                      <span className="text-neutral-500">-</span>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -2116,6 +2384,15 @@ function AdminDashboard({ bookings, packages, notifications, onRefresh, user, us
         </a>
 
       </div>
+      {isSuperAdmin && transferBooking && (
+        <TransferSessionModal
+          booking={transferBooking}
+          coaches={coaches}
+          user={user}
+          userProfile={userProfile}
+          onClose={() => setTransferBooking(null)}
+        />
+      )}
     </div>
   );
 }
@@ -2133,6 +2410,9 @@ export default function App() {
   const [bookings, setBookings] = useState([]);
   const [packages, setPackages] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [coaches, setCoaches] = useState([]);
+  const [transferLogs, setTransferLogs] = useState([]);
+  const [users, setUsers] = useState([]);
   const [adminUser, setAdminUser] = useState(null);
   const [adminProfile, setAdminProfile] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -2178,13 +2458,47 @@ export default function App() {
 
       try {
         const defaultProfile = getDefaultAdminProfile(nextUser);
-        const userSnapshot = await getDoc(doc(db, "users", nextUser.uid));
+        const userRef = doc(db, "users", nextUser.uid);
+        const userSnapshot = await getDoc(userRef);
         const profile = userSnapshot.exists() ? userSnapshot.data() : {};
+        const isKnownInternalAdmin = defaultProfile.role !== roles.VIEWER;
+
+        if (!userSnapshot.exists() && !isKnownInternalAdmin) {
+          await setDoc(userRef, {
+            uid: nextUser.uid,
+            name: nextUser.displayName || nextUser.email || "",
+            email: nextUser.email || "",
+            phone: nextUser.phoneNumber || "",
+            photoURL: nextUser.photoURL || "",
+            role: roles.PENDING_COACH,
+            status: "pending",
+            active: false,
+            coachId: nextUser.uid,
+            coachName: nextUser.displayName || nextUser.email || "",
+            coachEmail: nextUser.email || "",
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+
+          setAdminProfile({
+            role: roles.PENDING_COACH,
+            status: "pending",
+            coachId: nextUser.uid,
+            coachName: nextUser.displayName || nextUser.email || "",
+            coachEmail: nextUser.email || "",
+            photoURL: nextUser.photoURL || "",
+          });
+          return;
+        }
 
         setAdminProfile({
           role: profile.role || defaultProfile.role,
-          coachName: profile.coachName || defaultProfile.coachName,
-          coachEmail: profile.coachEmail || defaultProfile.coachEmail,
+          status: profile.status || (isKnownInternalAdmin ? "active" : "pending"),
+          active: profile.active ?? isKnownInternalAdmin,
+          coachId: profile.coachId || defaultProfile.coachId || nextUser.uid,
+          coachName: profile.coachName || profile.name || defaultProfile.coachName,
+          coachEmail: profile.coachEmail || profile.email || defaultProfile.coachEmail,
+          photoURL: profile.photoURL || nextUser.photoURL || "",
         });
       } catch (error) {
         console.error(error);
@@ -2273,6 +2587,73 @@ export default function App() {
     return unsubscribe;
   }, []);
 
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "coaches"),
+      (snapshot) => {
+        const nextCoaches = snapshot.docs.map((coachDoc) => ({
+          id: coachDoc.id,
+          coachId: coachDoc.data().coachId || coachDoc.id,
+          ...coachDoc.data(),
+        }));
+
+        nextCoaches.sort((a, b) => String(a.coachName || "").localeCompare(String(b.coachName || "")));
+        setCoaches(nextCoaches);
+      },
+      (error) => {
+        console.error(error);
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "transferLogs"),
+      (snapshot) => {
+        const nextLogs = snapshot.docs.map((logDoc) => ({
+          id: logDoc.id,
+          ...logDoc.data(),
+        }));
+
+        nextLogs.sort((a, b) => {
+          const aTime = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+          const bTime = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+          return bTime - aTime;
+        });
+
+        setTransferLogs(nextLogs);
+      },
+      (error) => {
+        console.error(error);
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "users"),
+      (snapshot) => {
+        const nextUsers = snapshot.docs.map((userDoc) => ({
+          id: userDoc.id,
+          uid: userDoc.data().uid || userDoc.id,
+          ...userDoc.data(),
+        }));
+
+        nextUsers.sort((a, b) => String(a.name || a.email || "").localeCompare(String(b.name || b.email || "")));
+        setUsers(nextUsers);
+      },
+      (error) => {
+        console.error(error);
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+
   async function submitBooking() {
     if (!name || !phone || !date || !selectedBookingTime) {
       setStatus("Please fill in name, phone, date and time.");
@@ -2300,6 +2681,7 @@ export default function App() {
       type: "booking",
       paymentType: "pay_per_session",
       createdBy: "",
+      coachId: "",
       coachName: "Coach Ilham",
       coachEmail: "",
       role: "public",
@@ -2411,11 +2793,46 @@ export default function App() {
         bookings={bookings}
         packages={packages}
         notifications={notifications}
+        coaches={coaches}
+        transferLogs={transferLogs}
+        users={users}
         onRefresh={refreshBookings}
         user={adminUser}
         userProfile={adminProfile}
         authLoading={authLoading}
       />
+    );
+  }
+
+  if (userProfile?.status === "pending" || userProfile?.role === roles.PENDING_COACH) {
+    return (
+      <div className="min-h-screen bg-neutral-950 text-white flex items-center justify-center px-5">
+        <div className="w-full max-w-lg rounded-3xl border border-neutral-800 bg-neutral-900 p-8 text-center">
+          <h1 className="text-3xl font-bold">Pending Approval</h1>
+          <p className="mt-3 text-neutral-300">
+            Your account is pending approval by Super Admin.
+          </p>
+          <button onClick={logoutAdmin} className="mt-6 rounded-2xl bg-neutral-800 px-5 py-3 font-semibold">
+            Logout
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (userProfile?.status === "rejected") {
+    return (
+      <div className="min-h-screen bg-neutral-950 text-white flex items-center justify-center px-5">
+        <div className="w-full max-w-lg rounded-3xl border border-neutral-800 bg-neutral-900 p-8 text-center">
+          <h1 className="text-3xl font-bold">Access Rejected</h1>
+          <p className="mt-3 text-neutral-300">
+            Your coach access request was rejected. Please contact Super Admin.
+          </p>
+          <button onClick={logoutAdmin} className="mt-6 rounded-2xl bg-neutral-800 px-5 py-3 font-semibold">
+            Logout
+          </button>
+        </div>
+      </div>
     );
   }
 
