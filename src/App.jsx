@@ -53,6 +53,143 @@ function formatDate(date) {
   return `${year}-${month}-${day}`;
 }
 
+const monthNameMap = {
+  jan: 0,
+  january: 0,
+  januari: 0,
+  feb: 1,
+  february: 1,
+  februari: 1,
+  mar: 2,
+  march: 2,
+  mac: 2,
+  apr: 3,
+  april: 3,
+  may: 4,
+  mei: 4,
+  jun: 5,
+  june: 5,
+  jul: 6,
+  july: 6,
+  julai: 6,
+  aug: 7,
+  august: 7,
+  ogos: 7,
+  sep: 8,
+  sept: 8,
+  september: 8,
+  oct: 9,
+  october: 9,
+  okt: 9,
+  oktober: 9,
+  nov: 10,
+  november: 10,
+  dec: 11,
+  december: 11,
+  dis: 11,
+  disember: 11,
+};
+
+function parseLeaveDateToken(day, month, year) {
+  const monthIndex = monthNameMap[String(month || "").toLowerCase()];
+  if (monthIndex === undefined) return null;
+
+  const today = new Date();
+  const resolvedYear = year ? Number(year) : today.getFullYear();
+  return new Date(resolvedYear, monthIndex, Number(day));
+}
+
+function normalizeLeaveTime(hourText, minuteText, meridiemText) {
+  let hour = Number(hourText);
+  const minute = Number(minuteText || 0);
+  const meridiem = String(meridiemText || "").toLowerCase();
+
+  if (meridiem === "pm" && hour < 12) hour += 12;
+  if (meridiem === "am" && hour === 12) hour = 0;
+
+  if (!meridiem && hour >= 8 && hour <= 11) {
+    hour += 12;
+  }
+
+  const date = new Date(2026, 0, 1, hour, minute);
+  return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+
+function findNearestTimeSlot(timeText) {
+  if (allTimeSlots.includes(timeText)) return timeText;
+
+  const targetDate = new Date(`2026-01-01 ${timeText}`);
+  let bestSlot = allTimeSlots[0];
+  let bestDistance = Infinity;
+
+  allTimeSlots.forEach((slot) => {
+    const slotDate = new Date(`2026-01-01 ${slot}`);
+    const distance = Math.abs(slotDate - targetDate);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestSlot = slot;
+    }
+  });
+
+  return bestSlot;
+}
+
+function parseLeaveRequest(text) {
+  const input = String(text || "").trim();
+  const lower = input.toLowerCase();
+  const today = new Date();
+  const tomorrow = new Date(today);
+  tomorrow.setDate(today.getDate() + 1);
+
+  let startDate = null;
+  let endDate = null;
+
+  if (/\b(esok|tomorrow)\b/.test(lower)) {
+    startDate = tomorrow;
+    endDate = tomorrow;
+  } else if (/\b(hari ini|today)\b/.test(lower)) {
+    startDate = today;
+    endDate = today;
+  }
+
+  const dateMatches = [...lower.matchAll(/(\d{1,2})\s+([a-z]+)(?:\s+(\d{4}))?/g)]
+    .map((match) => parseLeaveDateToken(match[1], match[2], match[3]))
+    .filter(Boolean);
+
+  if (dateMatches.length > 0) {
+    startDate = dateMatches[0];
+    endDate = dateMatches[dateMatches.length - 1];
+  }
+
+  if (!startDate || !endDate) {
+    return { error: "Could not understand the leave date. Try: cuti esok 4pm sampai 7pm" };
+  }
+
+  let startTime = allTimeSlots[0];
+  let endTime = allTimeSlots[allTimeSlots.length - 1];
+
+  if (!/\b(full day|sehari|all day)\b/.test(lower)) {
+    const timeMatches = [...lower.matchAll(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/g)]
+      .filter((match) => {
+        const before = lower.slice(Math.max(0, match.index - 4), match.index);
+        return !/\d{1,2}\s*$/.test(before);
+      });
+
+    if (timeMatches.length >= 2) {
+      startTime = findNearestTimeSlot(normalizeLeaveTime(timeMatches[0][1], timeMatches[0][2], timeMatches[0][3]));
+      endTime = findNearestTimeSlot(normalizeLeaveTime(timeMatches[1][1], timeMatches[1][2], timeMatches[1][3]));
+    }
+  }
+
+  return {
+    startDate: formatDate(startDate),
+    endDate: formatDate(endDate),
+    startTime,
+    endTime,
+    note: input || "Coach leave",
+  };
+}
+
 function isPastTimeSlot(dateString, timeSlot) {
   const todayString = formatDate(new Date());
 
@@ -1638,7 +1775,106 @@ function PendingCoachApprovals({ users, user }) {
   );
 }
 
-function AdminDashboard({ bookings, packages, notifications, coaches, transferLogs, users, onRefresh, user, userProfile, authLoading }) {
+function PendingLeaveRequests({ requests, bookings, user }) {
+  const pendingRequests = requests.filter((request) => request.status === "pending");
+
+  async function approveLeaveRequest(request) {
+    const coachBookings = bookings.filter((booking) => {
+      return String(booking.coachId || booking.createdBy || "") === String(request.coachId || "");
+    });
+    const startDate = new Date(request.startDate);
+    const endDate = new Date(request.endDate);
+    const startIndex = allTimeSlots.indexOf(request.startTime);
+    const endIndex = allTimeSlots.indexOf(request.endTime);
+
+    for (
+      let current = new Date(startDate);
+      current <= endDate;
+      current.setDate(current.getDate() + 1)
+    ) {
+      const currentDate = formatDate(current);
+
+      for (let i = startIndex; i <= endIndex; i++) {
+        const selectedTime = allTimeSlots[i];
+        if (!selectedTime) continue;
+        if (hasBookingOverlap(coachBookings, currentDate, selectedTime, 1)) continue;
+
+        await addDoc(collection(db, "bookings"), {
+          name: "Blocked",
+          phone: "",
+          date: currentDate,
+          time: selectedTime,
+          players: 0,
+          duration: 1,
+          location: "",
+          coachingFee: 0,
+          paymentStatus: "",
+          bookingStatus: "Confirmed",
+          note: request.note || "Coach leave",
+          type: "blocked",
+          createdBy: request.coachId || "",
+          coachId: request.coachId || "",
+          coachName: request.coachName || "",
+          coachEmail: request.coachEmail || "",
+          role: roles.COACH,
+          leaveRequestId: request.id,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+
+    await updateDoc(doc(db, "leaveRequests", request.id), {
+      status: "approved",
+      approvedAt: serverTimestamp(),
+      approvedBy: user?.uid || "",
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  async function rejectLeaveRequest(request) {
+    await updateDoc(doc(db, "leaveRequests", request.id), {
+      status: "rejected",
+      rejectedAt: serverTimestamp(),
+      rejectedBy: user?.uid || "",
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  return (
+    <div className="mt-8 rounded-3xl border border-neutral-800 bg-neutral-900 p-6">
+      <h2 className="text-2xl font-semibold">Pending Leave Requests</h2>
+      <div className="mt-5 space-y-3">
+        {pendingRequests.map((request) => (
+          <div key={request.id} className="rounded-2xl bg-neutral-950 p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <div className="font-semibold text-white">{request.coachName || "Coach"}</div>
+                <div className="mt-1 text-sm text-neutral-400">
+                  {request.startDate} to {request.endDate}, {request.startTime} - {request.endTime}
+                </div>
+                <div className="mt-1 text-sm text-neutral-300">{request.note || "-"}</div>
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => approveLeaveRequest(request)} className="rounded-xl bg-lime-400 px-4 py-2 text-sm font-semibold text-black">
+                  Approve Leave
+                </button>
+                <button type="button" onClick={() => rejectLeaveRequest(request)} className="rounded-xl bg-red-500/80 px-4 py-2 text-sm font-semibold text-white">
+                  Reject
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+        {pendingRequests.length === 0 && (
+          <p className="rounded-2xl bg-neutral-950 p-4 text-sm text-neutral-400">No pending leave requests.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AdminDashboard({ bookings, packages, notifications, coaches, transferLogs, users, leaveRequests, onRefresh, user, userProfile, authLoading }) {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginStatus, setLoginStatus] = useState("");
@@ -1650,6 +1886,8 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
   const [blockEndTime, setBlockEndTime] = useState("9:00 AM");
   const [blockNote, setBlockNote] = useState("NA");
   const [blockStatus, setBlockStatus] = useState("");
+  const [leavePrompt, setLeavePrompt] = useState("");
+  const [leaveParseStatus, setLeaveParseStatus] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [bookingSearchQuery, setBookingSearchQuery] = useState("");
   const [bookingSort, setBookingSort] = useState({ key: "date", direction: "desc" });
@@ -1674,23 +1912,49 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
   }, [packages, selectedCoach, user, userProfile]);
   const coachOptions = useMemo(() => {
     const coachMap = new Map();
+    const coachNameKeys = new Map();
     const currentCoachId = getCoachId(user, userProfile);
+    const currentCoachName = getCoachName(user, userProfile);
+
+    function normalizeCoachLabel(label) {
+      return normalizeStudentName(label)
+        .replace(/^coach\s+/, "")
+        .trim();
+    }
+
+    function setCoachOption(uid, label) {
+      if (!uid) return;
+
+      const safeLabel = String(label || uid || "Coach").trim();
+      const nameKey = normalizeCoachLabel(safeLabel);
+      const existingUid = coachNameKeys.get(nameKey);
+
+      if (existingUid && existingUid !== uid) {
+        if (existingUid === currentCoachId) {
+          coachMap.set(existingUid, safeLabel);
+        }
+        return;
+      }
+
+      coachNameKeys.set(nameKey, uid);
+      coachMap.set(uid, safeLabel);
+    }
 
     if (currentCoachId) {
-      coachMap.set(currentCoachId, getCoachName(user, userProfile));
+      setCoachOption(currentCoachId, currentCoachName);
     }
 
     coaches.forEach((coach) => {
       if (!coach.coachId) return;
       if (coach.active === false) return;
-      coachMap.set(coach.coachId, coach.coachName || coach.coachId);
+      setCoachOption(coach.coachId, coach.coachName || coach.name || coach.email || coach.coachId);
     });
 
     bookings.forEach((booking) => {
-      const bookingCoachId = booking.coachId || booking.createdBy;
+      const bookingCoachId = booking.coachId || booking.createdBy || currentCoachId;
       if (!bookingCoachId) return;
       if (!coachMap.has(bookingCoachId)) {
-        coachMap.set(bookingCoachId, getBookingCoachLabel(booking));
+        setCoachOption(bookingCoachId, getBookingCoachLabel(booking));
       }
     });
 
@@ -1993,6 +2257,45 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
     }
   }
 
+  async function applyLeavePrompt() {
+    const parsedLeave = parseLeaveRequest(leavePrompt);
+
+    if (parsedLeave.error) {
+      setLeaveParseStatus(parsedLeave.error);
+      return;
+    }
+
+    if (!isSuperAdmin) {
+      await addDoc(collection(db, "leaveRequests"), {
+        coachId: getCoachId(user, userProfile),
+        coachName: getCoachName(user, userProfile),
+        coachEmail: getCoachEmail(user, userProfile),
+        startDate: parsedLeave.startDate,
+        endDate: parsedLeave.endDate,
+        startTime: parsedLeave.startTime,
+        endTime: parsedLeave.endTime,
+        note: parsedLeave.note,
+        rawText: leavePrompt,
+        status: "pending",
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      setLeaveParseStatus("Leave request submitted. Waiting for Super Admin approval.");
+      setLeavePrompt("");
+      return;
+    }
+
+    setBlockStartDate(parsedLeave.startDate);
+    setBlockEndDate(parsedLeave.endDate);
+    setBlockStartTime(parsedLeave.startTime);
+    setBlockEndTime(parsedLeave.endTime);
+    setBlockNote(parsedLeave.note);
+    setLeaveParseStatus(
+      `Ready to block ${parsedLeave.startDate} to ${parsedLeave.endDate}, ${parsedLeave.startTime} - ${parsedLeave.endTime}. Review then click Block Selected Range.`
+    );
+  }
+
   async function loginAdmin() {
     setLoginStatus("Signing in...");
 
@@ -2217,9 +2520,37 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
         </div>
 
         {isSuperAdmin && <PendingCoachApprovals users={users} user={user} />}
+        {isSuperAdmin && <PendingLeaveRequests requests={leaveRequests} bookings={bookings} user={user} />}
 
         {canEdit ? (
           <div className="mt-8 bg-neutral-900 border border-neutral-800 rounded-3xl p-6">
+            <div className="mb-6 rounded-2xl border border-neutral-800 bg-neutral-950 p-4">
+              <h2 className="text-xl font-semibold">AI Leave Box</h2>
+              <p className="mt-1 text-sm text-neutral-400">
+                {isSuperAdmin
+                  ? "Type leave request in BM or English, then review the manual block fields before saving."
+                  : "Type leave request in BM or English. Super Admin must approve before your schedule is blocked."}
+              </p>
+              <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto]">
+                <textarea
+                  value={leavePrompt}
+                  onChange={(e) => setLeavePrompt(e.target.value)}
+                  placeholder="Example: cuti esok 4pm sampai 7pm sebab family event"
+                  className="min-h-24 rounded-2xl border border-neutral-700 bg-neutral-800 px-4 py-3 outline-none focus:border-lime-400"
+                />
+                <button
+                  type="button"
+                  onClick={applyLeavePrompt}
+                  className="rounded-2xl bg-lime-400 px-5 py-3 font-semibold text-black"
+                >
+                  {isSuperAdmin ? "Apply" : "Submit Request"}
+                </button>
+              </div>
+              {leaveParseStatus && (
+                <p className="mt-3 text-sm text-neutral-300">{leaveParseStatus}</p>
+              )}
+            </div>
+
             <h2 className="text-2xl font-semibold">Manual Block Slot</h2>
             <p className="mt-2 text-neutral-400">
               Block slots by date range and time range.
@@ -2478,6 +2809,7 @@ export default function App() {
   const [notifications, setNotifications] = useState([]);
   const [coaches, setCoaches] = useState([]);
   const [transferLogs, setTransferLogs] = useState([]);
+  const [leaveRequests, setLeaveRequests] = useState([]);
   const [users, setUsers] = useState([]);
   const [adminUser, setAdminUser] = useState(null);
   const [adminProfile, setAdminProfile] = useState(null);
@@ -2771,6 +3103,31 @@ export default function App() {
     return unsubscribe;
   }, []);
 
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "leaveRequests"),
+      (snapshot) => {
+        const nextRequests = snapshot.docs.map((requestDoc) => ({
+          id: requestDoc.id,
+          ...requestDoc.data(),
+        }));
+
+        nextRequests.sort((a, b) => {
+          const aTime = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+          const bTime = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+          return bTime - aTime;
+        });
+
+        setLeaveRequests(nextRequests);
+      },
+      (error) => {
+        console.error(error);
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+
   async function submitBooking() {
     if (!name || !phone || !date || !selectedBookingTime || !selectedCoach) {
       setStatus("Please fill in name, phone, date, time and coach.");
@@ -2918,6 +3275,7 @@ export default function App() {
         coaches={coaches}
         transferLogs={transferLogs}
         users={users}
+        leaveRequests={leaveRequests}
         onRefresh={refreshBookings}
         user={adminUser}
         userProfile={adminProfile}
