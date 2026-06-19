@@ -278,6 +278,11 @@ function normalizeStudentName(name) {
   return String(name || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+function isPrimaryIlhamCoachName(name) {
+  const normalizedName = normalizeStudentName(name).replace(/^coach\s+/, "");
+  return ["ilham", "ilham rahman"].includes(normalizedName);
+}
+
 function getCurrentCustomerCount(bookings) {
   const customerNames = new Set();
 
@@ -574,18 +579,30 @@ function canEditAdminData(userProfile) {
 
 function canViewBookingForAdmin(booking, user, userProfile, selectedCoach) {
   const role = getUserRole(userProfile);
-  const bookingCoachId = booking.coachId || booking.createdBy || "";
+  const bookingCoachId = String(booking.coachId || booking.createdBy || "");
+  const bookingCoachName = booking.coachName || "";
+  const ownCoachId = getCoachId(user, userProfile);
+  const ownCoachName = getCoachName(user, userProfile);
 
   if (role === roles.SUPER_ADMIN) {
     if (!selectedCoach) return false;
-    if (bookingCoachId) return bookingCoachId === selectedCoach;
-    return selectedCoach === getCoachId(user, userProfile);
+    const selectedOwnCoach = selectedCoach === ownCoachId;
+    const selectedPrimaryIlham = selectedOwnCoach && isPrimaryIlhamCoachName(ownCoachName);
+
+    if (bookingCoachId) {
+      return (
+        bookingCoachId === selectedCoach ||
+        (selectedPrimaryIlham && isPrimaryIlhamCoachName(bookingCoachName))
+      );
+    }
+
+    return selectedOwnCoach || selectedPrimaryIlham;
   }
 
   return Boolean(user?.uid) && (
     bookingCoachId === user.uid ||
     bookingCoachId === userProfile?.coachId ||
-    (!bookingCoachId && booking.coachName === getCoachName(user, userProfile))
+    (!bookingCoachId && normalizeStudentName(bookingCoachName) === normalizeStudentName(ownCoachName))
   );
 }
 
@@ -2824,14 +2841,26 @@ export default function App() {
     if (!selectedCoachId) return [];
 
     const selectedCoachRecord = coaches.find((coach) => coach.coachId === selectedCoachId);
+    const selectedCoachName =
+      selectedCoachRecord?.coachName ||
+      selectedCoachRecord?.name ||
+      selectedCoachRecord?.email ||
+      "";
     const isSelectedSuperAdmin = selectedCoachRecord?.role === roles.SUPER_ADMIN;
+    const isSelectedPrimaryIlham = isPrimaryIlhamCoachName(selectedCoachName);
 
     return bookings.filter((booking) => {
       const bookingCoachId = String(booking.coachId || booking.createdBy || "");
+      const bookingCoachName = booking.coachName || "";
 
-      if (bookingCoachId) return bookingCoachId === selectedCoachId;
+      if (bookingCoachId) {
+        return (
+          bookingCoachId === selectedCoachId ||
+          (isSelectedPrimaryIlham && isPrimaryIlhamCoachName(bookingCoachName))
+        );
+      }
 
-      return isSelectedSuperAdmin;
+      return isSelectedSuperAdmin || isSelectedPrimaryIlham;
     });
   }, [bookings, coaches, selectedCoachId]);
 
