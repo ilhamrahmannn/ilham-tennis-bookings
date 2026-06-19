@@ -46,6 +46,43 @@ const allTimeSlots = [
   "11:00 PM",
 ];
 
+const leaveDayPatternLabels = {
+  all: "Every day",
+  weekdays: "Weekdays only",
+  weekends: "Weekends only",
+};
+
+const serviceOptions = [
+  {
+    id: "kids",
+    title: "Tennis Lessons for Kids",
+    description:
+      "Kids Tennis Lessons Johor Bahru focus on confidence, coordination, footwork, and clean stroke basics in a friendly private coaching environment.",
+  },
+  {
+    id: "adult",
+    title: "Adult Tennis Coaching",
+    description:
+      "Adult Tennis Coaching Johor Bahru is available for new players, returning players, and adults who want focused Tennis Training Johor Bahru sessions.",
+  },
+  {
+    id: "beginner",
+    title: "Beginner Tennis Classes",
+    description:
+      "Tennis Classes Johor Bahru for beginners cover grips, rallying, serving, scoring, and match confidence at a pace that suits each student.",
+  },
+  {
+    id: "nusa-duta",
+    title: "Nusa Duta Tennis Complex Johor Bahru",
+    description:
+      "Book a Private Tennis Coach Johor Bahru session at Nusa Duta Tennis Complex with real-time coach availability and weekly schedule viewing.",
+  },
+];
+
+function getServiceById(serviceId) {
+  return serviceOptions.find((service) => service.id === serviceId) || null;
+}
+
 function formatDate(date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -134,12 +171,35 @@ function findNearestTimeSlot(timeText) {
   return bestSlot;
 }
 
-function parseLeaveRequest(text) {
+function getLeaveDayPattern(lowerText) {
+  if (/\b(weekend|weekends|sabtu\s*(dan|&)?\s*ahad|sabtu\s+ahad)\b/.test(lowerText)) {
+    return "weekends";
+  }
+
+  if (/\b(weekday|weekdays|working days|isnin\s*(hingga|to|-)?\s*jumaat|isnin\s+jumaat)\b/.test(lowerText)) {
+    return "weekdays";
+  }
+
+  return "all";
+}
+
+function matchesLeaveDayPattern(date, pattern = "all") {
+  const day = date.getDay();
+
+  if (pattern === "weekdays") return day >= 1 && day <= 5;
+  if (pattern === "weekends") return day === 0 || day === 6;
+
+  return true;
+}
+
+function parseLeaveRequest(text, options = {}) {
   const input = String(text || "").trim();
   const lower = input.toLowerCase();
   const today = new Date();
   const tomorrow = new Date(today);
   tomorrow.setDate(today.getDate() + 1);
+  const dayPattern = getLeaveDayPattern(lower);
+  const hasRecurringPattern = /\b(setiap|every|daily|hari-hari|weekday|weekdays|weekend|weekends)\b/.test(lower);
 
   let startDate = null;
   let endDate = null;
@@ -162,22 +222,33 @@ function parseLeaveRequest(text) {
   }
 
   if (!startDate || !endDate) {
-    return { error: "Could not understand the leave date. Try: cuti esok 4pm sampai 7pm" };
+    if (hasRecurringPattern && options.defaultStartDate && options.defaultEndDate) {
+      startDate = new Date(options.defaultStartDate);
+      endDate = new Date(options.defaultEndDate);
+    } else {
+      return { error: "Could not understand the leave date. Try: cuti esok 4pm sampai 7pm" };
+    }
   }
 
   let startTime = allTimeSlots[0];
   let endTime = allTimeSlots[allTimeSlots.length - 1];
 
   if (!/\b(full day|sehari|all day)\b/.test(lower)) {
-    const timeMatches = [...lower.matchAll(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/g)]
+    const timeMatches = [...lower.matchAll(/(?:\b(?:pukul|pkl|jam|at)\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/g)]
       .filter((match) => {
-        const before = lower.slice(Math.max(0, match.index - 4), match.index);
-        return !/\d{1,2}\s*$/.test(before);
+        const matchedText = match[0];
+        const hasTimeWord = /\b(pukul|pkl|jam|at)\b/.test(matchedText);
+        const hasMeridiem = Boolean(match[3]);
+        const hasMinutes = Boolean(match[2]);
+        return hasTimeWord || hasMeridiem || hasMinutes;
       });
 
     if (timeMatches.length >= 2) {
       startTime = findNearestTimeSlot(normalizeLeaveTime(timeMatches[0][1], timeMatches[0][2], timeMatches[0][3]));
       endTime = findNearestTimeSlot(normalizeLeaveTime(timeMatches[1][1], timeMatches[1][2], timeMatches[1][3]));
+    } else if (timeMatches.length === 1) {
+      startTime = findNearestTimeSlot(normalizeLeaveTime(timeMatches[0][1], timeMatches[0][2], timeMatches[0][3]));
+      endTime = startTime;
     }
   }
 
@@ -186,6 +257,7 @@ function parseLeaveRequest(text) {
     endDate: formatDate(endDate),
     startTime,
     endTime,
+    dayPattern,
     note: input || "Coach leave",
   };
 }
@@ -1809,6 +1881,8 @@ function PendingLeaveRequests({ requests, bookings, user }) {
       current <= endDate;
       current.setDate(current.getDate() + 1)
     ) {
+      if (!matchesLeaveDayPattern(current, request.dayPattern || "all")) continue;
+
       const currentDate = formatDate(current);
 
       for (let i = startIndex; i <= endIndex; i++) {
@@ -1870,6 +1944,9 @@ function PendingLeaveRequests({ requests, bookings, user }) {
                 <div className="mt-1 text-sm text-neutral-400">
                   {request.startDate} to {request.endDate}, {request.startTime} - {request.endTime}
                 </div>
+                <div className="mt-1 text-sm text-neutral-500">
+                  {leaveDayPatternLabels[request.dayPattern || "all"] || leaveDayPatternLabels.all}
+                </div>
                 <div className="mt-1 text-sm text-neutral-300">{request.note || "-"}</div>
               </div>
               <div className="flex gap-2">
@@ -1901,6 +1978,7 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
   const [blockEndDate, setBlockEndDate] = useState(formatDate(new Date()));
   const [blockStartTime, setBlockStartTime] = useState("8:00 AM");
   const [blockEndTime, setBlockEndTime] = useState("9:00 AM");
+  const [blockDayPattern, setBlockDayPattern] = useState("all");
   const [blockNote, setBlockNote] = useState("NA");
   const [blockStatus, setBlockStatus] = useState("");
   const [leavePrompt, setLeavePrompt] = useState("");
@@ -2230,9 +2308,11 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
 
       for (
         let current = new Date(startDate);
-        current <= endDate;
-        current.setDate(current.getDate() + 1)
-      ) {
+      current <= endDate;
+      current.setDate(current.getDate() + 1)
+    ) {
+        if (!matchesLeaveDayPattern(current, blockDayPattern)) continue;
+
         const currentDate = formatDate(current);
 
         for (let i = startIndex; i <= endIndex; i++) {
@@ -2275,7 +2355,11 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
   }
 
   async function applyLeavePrompt() {
-    const parsedLeave = parseLeaveRequest(leavePrompt);
+    const defaultLeaveRange = getPeriodRange("week", adminWeekDate);
+    const parsedLeave = parseLeaveRequest(leavePrompt, {
+      defaultStartDate: defaultLeaveRange.start,
+      defaultEndDate: defaultLeaveRange.end,
+    });
 
     if (parsedLeave.error) {
       setLeaveParseStatus(parsedLeave.error);
@@ -2291,6 +2375,7 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
         endDate: parsedLeave.endDate,
         startTime: parsedLeave.startTime,
         endTime: parsedLeave.endTime,
+        dayPattern: parsedLeave.dayPattern,
         note: parsedLeave.note,
         rawText: leavePrompt,
         status: "pending",
@@ -2307,9 +2392,10 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
     setBlockEndDate(parsedLeave.endDate);
     setBlockStartTime(parsedLeave.startTime);
     setBlockEndTime(parsedLeave.endTime);
+    setBlockDayPattern(parsedLeave.dayPattern || "all");
     setBlockNote(parsedLeave.note);
     setLeaveParseStatus(
-      `Ready to block ${parsedLeave.startDate} to ${parsedLeave.endDate}, ${parsedLeave.startTime} - ${parsedLeave.endTime}. Review then click Block Selected Range.`
+      `Ready to block ${parsedLeave.startDate} to ${parsedLeave.endDate}, ${parsedLeave.startTime} - ${parsedLeave.endTime} (${leaveDayPatternLabels[parsedLeave.dayPattern || "all"]}). Review then click Block Selected Range.`
     );
   }
 
@@ -2371,7 +2457,7 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
     return (
       <div className="min-h-screen bg-neutral-950 text-white flex items-center justify-center px-5">
         <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl p-8">
-          <h1 className="text-3xl font-bold">Coach Admin Login</h1>
+          <h1 className="text-3xl font-bold">Coach Login</h1>
           <p className="mt-2 text-neutral-400">Sign in with your admin username.</p>
 
           <input
@@ -2573,7 +2659,7 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
               Block slots by date range and time range.
             </p>
 
-            <div className="mt-5 grid md:grid-cols-5 gap-4">
+            <div className="mt-5 grid md:grid-cols-6 gap-4">
               <input
                 type="date"
                 value={blockStartDate}
@@ -2605,6 +2691,16 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
               >
                 {allTimeSlots.map((slot) => (
                   <option key={slot}>{slot}</option>
+                ))}
+              </select>
+
+              <select
+                value={blockDayPattern}
+                onChange={(e) => setBlockDayPattern(e.target.value)}
+                className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3"
+              >
+                {Object.entries(leaveDayPatternLabels).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
                 ))}
               </select>
 
@@ -2810,8 +2906,272 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
   );
 }
 
+function HomePage() {
+  return (
+    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-neutral-950 text-white">
+      <div className="w-full max-w-6xl mx-auto px-4 py-8 sm:px-5 sm:py-12">
+        <div className="flex justify-end mb-6">
+          <a
+            href="/admin"
+            className="rounded-full border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-lime-400 hover:text-lime-300 transition"
+          >
+            Coach Login
+          </a>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-10 items-center overflow-hidden">
+          <div>
+            <p className="inline-block rounded-full border border-lime-400/40 px-4 py-2 text-sm text-lime-300">
+              ITF Coaching Level 1 - Sport Science Level 1
+            </p>
+
+            <h1 className="mt-6 text-4xl md:text-6xl font-bold">
+              Private Tennis Coach in Johor Bahru
+            </h1>
+
+            <p className="mt-5 text-neutral-300 text-lg">
+              Coach Ilham Academy offers Tennis Lessons Johor Bahru for kids and adults, with private tennis coaching built around your level, your pace, and your goals.
+            </p>
+
+            <p className="mt-3 text-neutral-400">
+              Tennis Coach Johor Bahru based at Nusa Duta Tennis Complex.
+            </p>
+          </div>
+
+          <div className="flex justify-center">
+            <img
+              src={coachImage}
+              alt="Coach Ilham"
+              className="w-full max-w-sm sm:max-w-md rounded-3xl border border-neutral-800 object-cover shadow-2xl"
+            />
+          </div>
+        </div>
+
+        <section className="mt-10 grid gap-4 md:grid-cols-2">
+          {serviceOptions.map((service) => (
+            <a
+              key={service.id}
+              href={`/booking?service=${service.id}`}
+              className="rounded-3xl border border-neutral-800 bg-neutral-900 p-5 transition hover:border-lime-400/70 hover:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-lime-400"
+            >
+              <h2 className="text-xl font-semibold">{service.title}</h2>
+              <p className="mt-2 text-sm leading-6 text-neutral-400">{service.description}</p>
+            </a>
+          ))}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function BookingPage({
+  selectedService,
+  name,
+  setName,
+  phone,
+  setPhone,
+  selectedCoachId,
+  setSelectedCoachId,
+  publicCoachOptions,
+  date,
+  setDate,
+  selectedBookingTime,
+  setTime,
+  availableSlots,
+  reservedForSelectedDate,
+  location,
+  setLocation,
+  players,
+  setPlayers,
+  duration,
+  setDuration,
+  note,
+  setNote,
+  submitBooking,
+  loading,
+  status,
+  calendarMonth,
+  setCalendarMonth,
+  monthLabel,
+  monthDays,
+  getDateStatus,
+  selectedCoachBookings,
+}) {
+  return (
+    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-neutral-950 text-white">
+      <div className="w-full max-w-6xl mx-auto px-4 py-8 sm:px-5 sm:py-12">
+        <div className="mb-6 flex items-center justify-between gap-3">
+          <a href="/" className="rounded-full border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-lime-400 hover:text-lime-300 transition">
+            Back
+          </a>
+          <a href="/admin" className="rounded-full border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-lime-400 hover:text-lime-300 transition">
+            Coach Login
+          </a>
+        </div>
+
+        <div className="mb-8">
+          <p className="inline-block rounded-full border border-lime-400/40 px-4 py-2 text-sm text-lime-300">
+            Coach Ilham Academy
+          </p>
+          <h1 className="mt-5 text-3xl font-bold">Book Your Tennis Session</h1>
+          <p className="mt-3 rounded-2xl bg-neutral-900 border border-neutral-800 px-4 py-3 text-sm text-neutral-200">
+            Selected Service: <span className="font-semibold text-lime-300">{selectedService?.title || "General Tennis Coaching"}</span>
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+          <div className="w-full max-w-full self-start bg-neutral-900 border border-neutral-800 rounded-3xl p-4 sm:p-6 md:p-8">
+            <h2 className="text-2xl font-semibold mb-6">Booking Form</h2>
+
+            <div className="space-y-4">
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your Name" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
+              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone Number" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
+              <select
+                value={selectedCoachId}
+                onChange={(e) => setSelectedCoachId(e.target.value)}
+                className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400"
+              >
+                <option value="">Select Coach</option>
+                {publicCoachOptions.map((coach) => (
+                  <option key={coach.coachId} value={coach.coachId}>
+                    {coach.coachName}
+                  </option>
+                ))}
+              </select>
+              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
+
+              <select value={selectedBookingTime} onChange={(e) => setTime(e.target.value)} disabled={!selectedCoachId || availableSlots.length === 0} className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
+                {!selectedCoachId ? <option>Please select coach first</option> : availableSlots.length === 0 ? <option>No available slots</option> : availableSlots.map((slot) => <option key={slot}>{slot}</option>)}
+              </select>
+
+              {reservedForSelectedDate.length > 0 && (
+                <p className="text-sm text-neutral-400">
+                  Unavailable: {[...new Set(reservedForSelectedDate.map((slot) => slot.time))].join(", ")}
+                </p>
+              )}
+
+              <select value={location} onChange={(e) => setLocation(e.target.value)} className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
+                <option>Tennis Nusa Duta</option>
+                <option>Client Preferred Location</option>
+              </select>
+
+              <div className="grid grid-cols-2 gap-4">
+                <select value={players} onChange={(e) => setPlayers(Number(e.target.value))} className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
+                  <option value={1}>1 Player</option>
+                  <option value={2}>2 Players</option>
+                  <option value={3}>3 Players</option>
+                  <option value={4}>4 Players</option>
+                </select>
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="0.5"
+                    step="0.5"
+                    value={duration}
+                    onChange={(e) => setDuration(e.target.value)}
+                    onBlur={() => {
+                      if (!duration || Number(duration) < 1) {
+                        setDuration("1");
+                      }
+                    }}
+                    placeholder="1 hour"
+                    className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 pr-20 outline-none focus:border-lime-400"
+                  />
+                  <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-sm text-neutral-400">
+                    hours
+                  </span>
+                </div>
+              </div>
+
+              <textarea rows="4" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Notes" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
+
+              <button onClick={submitBooking} disabled={loading || !selectedCoachId || availableSlots.length === 0} className="w-full bg-white text-black rounded-2xl py-4 font-semibold hover:bg-neutral-200 transition disabled:opacity-50">
+                {loading ? "Please wait..." : "Book Now"}
+              </button>
+
+              {status && <p className="text-sm text-neutral-300">{status}</p>}
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8">
+              <div className="flex items-center justify-between gap-3 mb-6">
+                <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))} className="rounded-xl border border-neutral-700 px-3 py-2">&larr;</button>
+                <h2 className="text-2xl font-semibold text-center">{monthLabel}</h2>
+                <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))} className="rounded-xl border border-neutral-700 px-3 py-2">&rarr;</button>
+              </div>
+
+              <div className="grid grid-cols-7 gap-2 text-center text-xs text-neutral-400 mb-2">
+                {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => <div key={day}>{day}</div>)}
+              </div>
+
+              <div className="grid grid-cols-7 gap-2">
+                {monthDays.map((day, index) => {
+                  const dayString = day ? formatDate(day) : "";
+                  const dayStatus = getDateStatus(day);
+                  const isFullDay = dayStatus === "full";
+                  const isSelected = dayString === date;
+                  const today = new Date();
+                  today.setHours(0, 0, 0, 0);
+                  const isPast = day && day < today;
+
+                  return (
+                    <button
+                      key={index}
+                      disabled={!day || isPast}
+                      onClick={() => day && setDate(dayString)}
+                      className={`min-h-20 rounded-2xl border p-2 text-left transition ${isPast
+                        ? "opacity-30 cursor-not-allowed border-neutral-900 bg-neutral-950"
+                        : isSelected
+                          ? "border-lime-400 bg-lime-400 text-black"
+                          : "border-neutral-800 bg-neutral-950 hover:border-neutral-600"
+                        } ${!day ? "opacity-0" : ""}`}
+                    >
+                      {day && (
+                        <>
+                          <div className={`font-semibold ${isFullDay ? "line-through decoration-2" : ""}`}>{day.getDate()}</div>
+                          {!isFullDay && (
+                            <div className={`mt-2 text-[10px] ${isSelected ? "text-black" : "text-lime-300"}`}>
+                              {dayStatus}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <WeeklySchedule
+              bookings={selectedCoachBookings}
+              selectedDate={date}
+              onSelectDate={setDate}
+              className="min-h-[600px] flex flex-col"
+              contentClassName="min-h-[520px] flex-1"
+            />
+
+            <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8">
+              <h2 className="text-2xl font-semibold mb-5">Nusa Duta Tennis Complex</h2>
+              <div className="grid sm:grid-cols-2 gap-4 text-neutral-300">
+                <div className="rounded-2xl bg-neutral-800 p-4"><div className="font-semibold text-white">Day Session</div><div>8AM - 7PM</div><div>Outdoor RM10/hour</div><div>Indoor RM15/hour</div></div>
+                <div className="rounded-2xl bg-neutral-800 p-4"><div className="font-semibold text-white">Night Session</div><div>7PM - 12AM</div><div>Outdoor RM20/hour</div><div>Indoor RM30/hour</div></div>
+              </div>
+              <a href="https://booking.stadiumjohor.my/product-tag/tennis/" target="_blank" className="inline-block mt-6 text-lime-400 hover:text-lime-300">Book Court at Stadium Johor &rarr;</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
-  const isAdminPage = window.location.pathname === "/admin";
+  const currentPath = window.location.pathname;
+  const searchParams = new URLSearchParams(window.location.search);
+  const isAdminPage = currentPath === "/admin";
+  const isBookingPage = currentPath === "/booking";
+  const selectedService = getServiceById(searchParams.get("service"));
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [players, setPlayers] = useState(1);
@@ -3182,6 +3542,8 @@ export default function App() {
       bookingStatus: "Confirmed",
       note,
       type: "booking",
+      serviceType: selectedService?.id || "",
+      serviceName: selectedService?.title || "",
       paymentType: "pay_per_session",
       createdBy: "",
       coachId: selectedCoach.coachId,
@@ -3208,6 +3570,8 @@ export default function App() {
           duration: durationHours,
           location,
           paymentStatus: bookingData.paymentStatus,
+          serviceType: bookingData.serviceType,
+          serviceName: bookingData.serviceName,
           note,
         };
 
@@ -3243,6 +3607,8 @@ export default function App() {
         `Time: ${selectedBookingTime}
 ` +
         `Coach: ${selectedCoach.coachName}
+` +
+        `Service: ${selectedService?.title || "-"}
 ` +
         `Players: ${players}
 ` +
@@ -3313,6 +3679,46 @@ export default function App() {
     );
   }
 
+  if (isBookingPage) {
+    return (
+      <BookingPage
+        selectedService={selectedService}
+        name={name}
+        setName={setName}
+        phone={phone}
+        setPhone={setPhone}
+        selectedCoachId={selectedCoachId}
+        setSelectedCoachId={setSelectedCoachId}
+        publicCoachOptions={publicCoachOptions}
+        date={date}
+        setDate={setDate}
+        selectedBookingTime={selectedBookingTime}
+        setTime={setTime}
+        availableSlots={availableSlots}
+        reservedForSelectedDate={reservedForSelectedDate}
+        location={location}
+        setLocation={setLocation}
+        players={players}
+        setPlayers={setPlayers}
+        duration={duration}
+        setDuration={setDuration}
+        note={note}
+        setNote={setNote}
+        submitBooking={submitBooking}
+        loading={loading}
+        status={status}
+        calendarMonth={calendarMonth}
+        setCalendarMonth={setCalendarMonth}
+        monthLabel={monthLabel}
+        monthDays={monthDays}
+        getDateStatus={getDateStatus}
+        selectedCoachBookings={selectedCoachBookings}
+      />
+    );
+  }
+
+  return <HomePage />;
+
   return (
     <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-neutral-950 text-white">
       <div className="w-full max-w-6xl mx-auto px-4 py-8 sm:px-5 sm:py-12">
@@ -3321,7 +3727,7 @@ export default function App() {
             href="/admin"
             className="rounded-full border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-lime-400 hover:text-lime-300 transition"
           >
-            Admin Login
+            Coach Login
           </a>
         </div>
 
@@ -3334,15 +3740,15 @@ export default function App() {
             </p>
 
             <h1 className="mt-6 text-4xl md:text-6xl font-bold">
-              Train With Coach Ilham
+              Private Tennis Coach in Johor Bahru
             </h1>
 
             <p className="mt-5 text-neutral-300 text-lg">
-              Private tennis coaching built around your level, your pace, and your goals.
+              Coach Ilham Academy offers Tennis Lessons Johor Bahru for kids and adults, with private tennis coaching built around your level, your pace, and your goals.
             </p>
 
             <p className="mt-3 text-neutral-400">
-              Based at Nusa Duta Tennis Complex
+              Tennis Coach Johor Bahru based at Nusa Duta Tennis Complex.
             </p>
           </div>
 
@@ -3355,6 +3761,36 @@ export default function App() {
           </div>
 
         </div>
+
+        <section className="mt-10 grid gap-4 md:grid-cols-2">
+          <div className="rounded-3xl border border-neutral-800 bg-neutral-900 p-5">
+            <h2 className="text-xl font-semibold">Tennis Lessons for Kids</h2>
+            <p className="mt-2 text-sm leading-6 text-neutral-400">
+              Kids Tennis Lessons Johor Bahru focus on confidence, coordination, footwork, and clean stroke basics in a friendly private coaching environment.
+            </p>
+          </div>
+
+          <div className="rounded-3xl border border-neutral-800 bg-neutral-900 p-5">
+            <h2 className="text-xl font-semibold">Adult Tennis Coaching</h2>
+            <p className="mt-2 text-sm leading-6 text-neutral-400">
+              Adult Tennis Coaching Johor Bahru is available for new players, returning players, and adults who want focused Tennis Training Johor Bahru sessions.
+            </p>
+          </div>
+
+          <div className="rounded-3xl border border-neutral-800 bg-neutral-900 p-5">
+            <h2 className="text-xl font-semibold">Beginner Tennis Classes</h2>
+            <p className="mt-2 text-sm leading-6 text-neutral-400">
+              Tennis Classes Johor Bahru for beginners cover grips, rallying, serving, scoring, and match confidence at a pace that suits each student.
+            </p>
+          </div>
+
+          <div className="rounded-3xl border border-neutral-800 bg-neutral-900 p-5">
+            <h2 className="text-xl font-semibold">Nusa Duta Tennis Complex Johor Bahru</h2>
+            <p className="mt-2 text-sm leading-6 text-neutral-400">
+              Book a Private Tennis Coach Johor Bahru session at Nusa Duta Tennis Complex with real-time coach availability and weekly schedule viewing.
+            </p>
+          </div>
+        </section>
 
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-12 items-start">
