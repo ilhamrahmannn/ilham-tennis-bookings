@@ -79,8 +79,18 @@ const serviceOptions = [
   },
 ];
 
+const nusaDutaIndoorCourtUrl = "https://booking.stadiumjohor.my/product/tennis-pusat-kecemerlangan-sukan-johor-nusa-duta/";
+const nusaDutaOutdoorCourtUrl = "https://booking.stadiumjohor.my/product/tennis-outdoor-pusat-kecemerlangan-sukan-johor-nusa-duta/";
+
 function getServiceById(serviceId) {
   return serviceOptions.find((service) => service.id === serviceId) || null;
+}
+
+function getCourtBookingUrl(location, courtOption) {
+  if (location !== "Tennis Nusa Duta") return "";
+  if (courtOption === "Indoor") return nusaDutaIndoorCourtUrl;
+  if (courtOption === "Outdoor") return nusaDutaOutdoorCourtUrl;
+  return "";
 }
 
 function formatDate(date) {
@@ -2981,6 +2991,8 @@ function BookingPage({
   reservedForSelectedDate,
   location,
   setLocation,
+  courtOption,
+  setCourtOption,
   players,
   setPlayers,
   duration,
@@ -2997,6 +3009,8 @@ function BookingPage({
   getDateStatus,
   selectedCoachBookings,
 }) {
+  const courtBookingUrl = getCourtBookingUrl(location, courtOption);
+
   return (
     <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-neutral-950 text-white">
       <div className="w-full max-w-6xl mx-auto px-4 py-8 sm:px-5 sm:py-12">
@@ -3050,10 +3064,41 @@ function BookingPage({
                 </p>
               )}
 
-              <select value={location} onChange={(e) => setLocation(e.target.value)} className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
+              <select
+                value={location}
+                onChange={(e) => {
+                  setLocation(e.target.value);
+                  if (e.target.value !== "Tennis Nusa Duta") setCourtOption("");
+                }}
+                className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400"
+              >
                 <option>Tennis Nusa Duta</option>
                 <option>Client Preferred Location</option>
               </select>
+
+              {location === "Tennis Nusa Duta" && (
+                <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-4">
+                  <label className="text-sm font-semibold text-neutral-200">Court Option</label>
+                  <select
+                    value={courtOption}
+                    onChange={(e) => setCourtOption(e.target.value)}
+                    className="mt-3 w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400"
+                  >
+                    <option value="">Select indoor or outdoor court</option>
+                    <option value="Indoor">Indoor Court</option>
+                    <option value="Outdoor">Outdoor Court</option>
+                  </select>
+                  {courtBookingUrl && (
+                    <a
+                      href={courtBookingUrl}
+                      target="_blank"
+                      className="mt-3 inline-block text-sm font-semibold text-lime-400 hover:text-lime-300"
+                    >
+                      Open {courtOption} court booking &rarr;
+                    </a>
+                  )}
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 <select value={players} onChange={(e) => setPlayers(Number(e.target.value))} className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
@@ -3179,6 +3224,7 @@ export default function App() {
   const [date, setDate] = useState(formatDate(new Date()));
   const [time, setTime] = useState("8:00 AM");
   const [location, setLocation] = useState("Tennis Nusa Duta");
+  const [courtOption, setCourtOption] = useState("");
   const [selectedCoachId, setSelectedCoachId] = useState("");
   const [note, setNote] = useState("");
   const [bookings, setBookings] = useState([]);
@@ -3523,6 +3569,11 @@ export default function App() {
       return;
     }
 
+    if (location === "Tennis Nusa Duta" && !courtOption) {
+      setStatus("Please choose Indoor Court or Outdoor Court.");
+      return;
+    }
+
     if (hasBookingOverlap(selectedCoachBookings, date, selectedBookingTime, durationHours)) {
       setStatus("That slot is no longer available. Please choose another time.");
       return;
@@ -3537,6 +3588,7 @@ export default function App() {
       players,
       duration: durationHours,
       location,
+      courtOption: location === "Tennis Nusa Duta" ? courtOption : "",
       coachingFee: price,
       paymentStatus: "Unpaid",
       bookingStatus: "Confirmed",
@@ -3569,6 +3621,7 @@ export default function App() {
           players,
           duration: durationHours,
           location,
+          courtOption: bookingData.courtOption,
           paymentStatus: bookingData.paymentStatus,
           serviceType: bookingData.serviceType,
           serviceName: bookingData.serviceName,
@@ -3616,6 +3669,8 @@ export default function App() {
 ` +
         `Location: ${location}
 ` +
+        `Court Option: ${bookingData.courtOption || "-"}
+` +
         `Coaching Fee: RM${price}
 ` +
         `Payment Status: Unpaid
@@ -3628,10 +3683,15 @@ export default function App() {
 
       setStatus("Booking saved. Opening WhatsApp...");
       window.open(`https://wa.me/601137507963?text=${whatsappMessage}`, "_blank");
+      const courtBookingUrl = getCourtBookingUrl(location, courtOption);
+      if (courtBookingUrl) {
+        window.open(courtBookingUrl, "_blank");
+      }
 
       setName("");
       setPhone("");
       setSelectedCoachId("");
+      setCourtOption("");
       setNote("");
     } catch (error) {
       console.error(error);
@@ -3698,6 +3758,8 @@ export default function App() {
         reservedForSelectedDate={reservedForSelectedDate}
         location={location}
         setLocation={setLocation}
+        courtOption={courtOption}
+        setCourtOption={setCourtOption}
         players={players}
         setPlayers={setPlayers}
         duration={duration}
