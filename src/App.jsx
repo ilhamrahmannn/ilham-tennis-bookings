@@ -770,6 +770,7 @@ function WeeklySchedule({
   className = "mt-8",
   contentClassName = "",
   editable = false,
+  hideBookingNames = false,
   onSaveCell,
 }) {
   const [editingCell, setEditingCell] = useState(null);
@@ -960,8 +961,11 @@ function WeeklySchedule({
                       onSelectDate(dateString);
                     }}
                     className={cellClassName}
+                    aria-label={booking ? "Booked slot" : "Available slot"}
                   >
-                    {shouldDimPast || isUnavailableCell ? "" : cellText}
+                    {shouldDimPast || isUnavailableCell || (booking && hideBookingNames)
+                      ? ""
+                      : cellText}
                   </button>
                 );
               })}
@@ -3194,6 +3198,7 @@ function BookingPage({
               onSelectDate={setDate}
               className="min-h-[600px] flex flex-col"
               contentClassName="min-h-[520px] flex-1"
+              hideBookingNames
             />
 
             <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8">
@@ -3987,6 +3992,7 @@ export default function App() {
               onSelectDate={setDate}
               className="min-h-[600px] flex flex-col"
               contentClassName="min-h-[520px] flex-1"
+              hideBookingNames
             />
 
 
