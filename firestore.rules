@@ -1,0 +1,73 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function hasUserProfile() { return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function userProfile() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function isSuperAdmin() {
+      return signedIn() && (
+        request.auth.token.email == 'ilham@ilham-booking.local'
+        || (hasUserProfile() && userProfile().role == 'super_admin' && userProfile().status == 'active')
+      );
+    }
+    function isCoach() {
+      return signedIn() && (
+        request.auth.token.email in ['zayn@ilham-booking.local', 'khalis@ilham-booking.local']
+        || (hasUserProfile() && userProfile().role == 'coach' && userProfile().status == 'active')
+      );
+    }
+    function ownsBooking() { return signedIn() && resource.data.customerId == request.auth.uid; }
+
+    match /customers/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isSuperAdmin());
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.uid == uid
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.role == 'customer';
+      allow update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.role == 'customer';
+    }
+
+    match /bookings/{bookingId} {
+      allow get, list: if isSuperAdmin() || (isCoach() && resource.data.coachId == request.auth.uid) || ownsBooking();
+      allow create: if isSuperAdmin()
+        || (isCoach() && request.resource.data.coachId == request.auth.uid)
+        || (signedIn()
+          && request.resource.data.customerId == request.auth.uid
+          && request.resource.data.customerEmail == request.auth.token.email
+          && request.resource.data.status == 'pending_confirmation');
+      allow update: if isSuperAdmin() || (isCoach() && resource.data.coachId == request.auth.uid)
+        || (ownsBooking()
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.coachId == resource.data.coachId
+          && !request.resource.data.diff(resource.data).changedKeys().hasAny(['customerEmail', 'completedAt'])
+          && request.resource.data.status in ['pending_confirmation', 'confirmed', 'cancelled', 'expired']);
+    }
+
+    match /availabilityLocks/{lockId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && (request.resource.data.customerId == request.auth.uid || isSuperAdmin() || (isCoach() && request.resource.data.coachId == request.auth.uid));
+      allow delete: if signedIn() && (resource.data.customerId == request.auth.uid || isSuperAdmin() || isCoach());
+    }
+
+    match /coaches/{coachId} { allow read: if signedIn(); allow write: if isSuperAdmin(); }
+    match /packages/{packageId} {
+      allow read: if isSuperAdmin() || (isCoach() && resource.data.coachId == request.auth.uid);
+      allow create: if isSuperAdmin() || (isCoach() && request.resource.data.coachId == request.auth.uid);
+      allow update: if isSuperAdmin() || (isCoach() && resource.data.coachId == request.auth.uid && request.resource.data.coachId == request.auth.uid);
+    }
+    match /leaveRequests/{requestId} {
+      allow read: if isSuperAdmin() || (isCoach() && resource.data.coachId == request.auth.uid);
+      allow create: if isCoach() && request.resource.data.coachId == request.auth.uid;
+      allow update: if isSuperAdmin();
+    }
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isSuperAdmin());
+      allow create: if signedIn() && request.auth.uid == uid && request.resource.data.role == 'pending_coach' && request.resource.data.status == 'pending';
+      allow update, delete: if isSuperAdmin();
+    }
+    match /{document=**} { allow read, write: if isSuperAdmin(); }
+  }
+}

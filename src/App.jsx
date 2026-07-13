@@ -1,9 +1,10 @@
 import coachImage from "./assets/ilham.jpg";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, signOut } from "firebase/auth";
-import { addDoc, collection, deleteDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
+import { Timestamp, addDoc, collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, query, runTransaction, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
 import { Bell } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { auth, db } from "./firebase";
+import { downloadBookingPdf } from "./bookingPdf";
 
 const roles = {
   SUPER_ADMIN: "super_admin",
@@ -336,7 +337,27 @@ function isValidCoachingBooking(booking) {
 }
 
 function isReservedBooking(booking) {
-  return String(booking.bookingStatus || "").trim() === "Confirmed";
+  const status = String(booking.status || booking.bookingStatus || "").trim().toLowerCase();
+  if (["cancelled", "expired"].includes(status)) return false;
+  if (status === "pending_confirmation") {
+    const expiry = booking.confirmationExpiresAt?.toDate?.() || new Date(booking.confirmationExpiresAt || 0);
+    return expiry.getTime() > Date.now();
+  }
+  return ["confirmed", "completed", "blocked", "not_available"].includes(status);
+}
+
+function getEndTime(startTime, duration) {
+  const startIndex = allTimeSlots.indexOf(startTime);
+  const endIndex = startIndex + Math.ceil(Number(duration) || 1);
+  return allTimeSlots[endIndex] || "12:00 AM";
+}
+
+function getBookingReference(bookingId, date) {
+  return `ILHAM-${String(date || "").replaceAll("-", "")}-${String(bookingId).slice(-4).toUpperCase()}`;
+}
+
+function getSlotLockId(coachId, date, time) {
+  return `${coachId}_${date}_${time}`.replace(/[^a-zA-Z0-9_-]/g, "-");
 }
 
 function getBookingDuration(booking) {
@@ -561,6 +582,16 @@ function getRequestedSlotKeys(date, time, duration) {
   }).filter(Boolean);
 }
 
+function getAvailabilityLockTime(lock) {
+  const date = String(lock?.date || "").trim();
+  const storedTime = String(lock?.time || "").trim();
+  const legacyPrefix = date ? `${date}-` : "";
+
+  return legacyPrefix && storedTime.startsWith(legacyPrefix)
+    ? storedTime.slice(legacyPrefix.length)
+    : storedTime;
+}
+
 function hasBookingOverlap(bookings, date, time, duration) {
   const requestedSlotKeys = getRequestedSlotKeys(date, time, duration);
   if (requestedSlotKeys.length !== getBookingSlotCount({ duration })) return true;
@@ -697,17 +728,6 @@ function cleanTableValue(value) {
   return text.toLowerCase() === "#error!" ? "" : text;
 }
 
-function shouldSendBookingNotification(booking) {
-  const name = String(booking.name || "").trim().toLowerCase();
-  const type = String(booking.type || booking.bookingType || "").trim().toLowerCase();
-
-  return !(
-    name === "blocked" ||
-    type === "blocked" ||
-    (Number(booking.players) === 0 && Number(booking.duration) === 0)
-  );
-}
-
 function formatNotificationDate(createdAt) {
   const date = createdAt?.toDate ? createdAt.toDate() : null;
   if (!date) return "";
@@ -792,7 +812,7 @@ function WeeklySchedule({
         expandedSlots.map((slot) => [`${slot.date}-${slot.time}`, slot.booking])
       ),
     };
-  }, [bookings, selectedDate, editable]);
+  }, [bookings, selectedDate]);
 
   function getBooking(date, time) {
     const dateString = formatDate(date);
@@ -2070,6 +2090,7 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
     return Array.from(coachMap.entries()).map(([uid, label]) => ({ uid, label }));
   }, [bookings, coaches, user, userProfile]);
 
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!isSuperAdmin) return;
     if (coachOptions.length === 0) return;
@@ -2079,6 +2100,7 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
     const ownOption = coachOptions.find((coach) => coach.uid === ownCoachId);
     setSelectedCoach(ownOption?.uid || coachOptions[0].uid);
   }, [coachOptions, isSuperAdmin, selectedCoach, user, userProfile]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const adminWeekRange = getPeriodRange("week", adminWeekDate);
   const adminWeekEndDate = new Date(adminWeekRange.end);
@@ -2119,8 +2141,10 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
     return clientBookings.filter((booking) => {
       const name = String(booking.name || "").toLowerCase();
       const phone = cleanTableValue(booking.phone).toLowerCase();
+      const email = String(booking.customerEmail || "").toLowerCase();
+      const reference = String(booking.bookingReference || "").toLowerCase();
 
-      return !query || name.includes(query) || phone.includes(query);
+      return !query || name.includes(query) || phone.includes(query) || email.includes(query) || reference.includes(query);
     });
   }, [clientBookings, bookingSearchQuery]);
   function getSortValue(booking, key) {
@@ -2152,16 +2176,21 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
     currentPage * rowsPerPage
   );
   const tableColumns = [
+    ["bookingReference", "Reference"],
     ["date", "Date"],
     ["time", "Time"],
     ["name", "Name"],
     ["phone", "Phone"],
+    ["customerEmail", "Email"],
+    ["customerId", "Customer Account"],
     ["players", "Players"],
     ["duration", "Duration"],
     ["location", "Location"],
     ["coachName", "Coach"],
     ["paymentStatus", "Payment"],
     ["bookingStatus", "Status"],
+    ["confirmationEmailStatus", "Email"],
+    ["pdfGenerated", "PDF"],
     ["note", "Note"],
     ["actions", "Actions"],
   ];
@@ -2227,6 +2256,93 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
     }
   }
 
+  async function sendConfirmationEmail(booking) {
+    try {
+      setPhoneEditStatus("Sending confirmation email...");
+      const token = await user.getIdToken();
+      const response = await fetch("/api/send-booking-confirmation", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ bookingId: booking.id }) });
+      if (!response.ok) throw new Error("Email service rejected the request.");
+      await updateDoc(doc(db, "bookings", booking.id), { confirmationEmailSent: true, confirmationEmailSentAt: serverTimestamp(), confirmationEmailStatus: "sent", updatedAt: serverTimestamp() });
+      setPhoneEditStatus("Confirmation email sent.");
+    } catch (error) {
+      console.error(error);
+      await updateDoc(doc(db, "bookings", booking.id), { confirmationEmailStatus: "failed", updatedAt: serverTimestamp() });
+      setPhoneEditStatus("Email failed. You can retry without affecting the confirmed booking.");
+    }
+  }
+
+  async function manuallyConfirmBooking(booking) {
+    try {
+      const bookingRef = doc(db, "bookings", booking.id);
+      const slots = getRequestedSlotKeys(booking.date, booking.startTime || booking.time, booking.durationHours || booking.duration);
+      await runTransaction(db, async (transaction) => {
+        const lockRefs = slots.map((slot) => doc(db, "availabilityLocks", getSlotLockId(booking.coachId, booking.date, slot)));
+        const locks = [];
+        for (const lockRef of lockRefs) locks.push(await transaction.get(lockRef));
+        if (locks.some((lock) => lock.exists() && lock.data().bookingId !== booking.id && lock.data().status !== "expired")) throw new Error("This slot is no longer available.");
+        transaction.update(bookingRef, { status: "confirmed", bookingStatus: "Confirmed", bookingReference: booking.bookingReference || getBookingReference(booking.id, booking.date), confirmedAt: serverTimestamp(), pdfGenerated: true, confirmationEmailStatus: "pending", updatedAt: serverTimestamp() });
+        lockRefs.forEach((lockRef) => {
+          const slot = slots[lockRefs.indexOf(lockRef)];
+          transaction.set(lockRef, { bookingId: booking.id, customerId: booking.customerId || "", coachId: booking.coachId, date: booking.date, time: getAvailabilityLockTime({ date: booking.date, time: slot }), status: "confirmed", confirmationExpiresAt: null, updatedAt: serverTimestamp() });
+        });
+      });
+      setPhoneEditStatus("Booking confirmed. Use Resend Email to notify the customer.");
+    } catch (error) {
+      setPhoneEditStatus(error.message || "Could not confirm booking.");
+    }
+  }
+
+  async function linkLegacyBooking(booking) {
+    if (!isSuperAdmin || booking.customerId) return;
+    try {
+      setPhoneEditStatus("Looking for a verified customer account...");
+      const matches = new Map();
+      const email = String(booking.customerEmail || booking.email || "").trim();
+      const phone = cleanTableValue(booking.phone);
+      if (email) (await getDocs(query(collection(db, "customers"), where("email", "==", email)))).docs.forEach((match) => matches.set(match.id, match));
+      if (phone) (await getDocs(query(collection(db, "customers"), where("phone", "==", phone)))).docs.forEach((match) => matches.set(match.id, match));
+      if (matches.size !== 1) {
+        setPhoneEditStatus(matches.size === 0 ? "No exact email or phone match found. The legacy booking was not linked." : "Multiple customer matches found. The legacy booking was not linked.");
+        return;
+      }
+      const customerDoc = [...matches.values()][0];
+      const customer = customerDoc.data();
+      await updateDoc(doc(db, "bookings", booking.id), { customerId: customerDoc.id, customerName: customer.fullName || booking.name || "", customerEmail: customer.email || email, customerPhone: customer.phone || phone, updatedAt: serverTimestamp() });
+      setPhoneEditStatus("Legacy booking linked to the verified customer account.");
+    } catch (error) {
+      console.error(error);
+      setPhoneEditStatus("Customer linking failed. No booking data was changed.");
+    }
+  }
+
+  async function cancelBookingAndReleaseLocks(booking) {
+    const lockSnapshot = await getDocs(
+      query(collection(db, "availabilityLocks"), where("bookingId", "==", booking.id))
+    );
+    const batch = writeBatch(db);
+
+    batch.update(doc(db, "bookings", booking.id), {
+      status: "cancelled",
+      bookingStatus: "Cancelled",
+      cancelledAt: serverTimestamp(),
+      cancelledBy: user?.uid || "",
+      updatedAt: serverTimestamp(),
+    });
+    lockSnapshot.docs.forEach((lockDoc) => batch.delete(lockDoc.ref));
+    await batch.commit();
+  }
+
+  async function cancelAdminBooking(booking) {
+    if (!isSuperAdmin) return;
+    try {
+      await cancelBookingAndReleaseLocks(booking);
+      setPhoneEditStatus("Booking cancelled and its slot is available again.");
+    } catch (error) {
+      console.error(error);
+      setPhoneEditStatus("Booking could not be cancelled.");
+    }
+  }
+
   async function saveWeeklyScheduleCell({ date, time, booking, value }) {
     if (!canEdit) {
       alert("Your account is read-only.");
@@ -2247,7 +2363,7 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
     const text = String(value || "").trim();
 
     if (booking?.id && !text) {
-      await deleteDoc(doc(db, "bookings", booking.id));
+      await cancelBookingAndReleaseLocks(booking);
       return;
     }
 
@@ -2796,7 +2912,7 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
                 setBookingSearchQuery(e.target.value);
                 setCurrentPage(1);
               }}
-              placeholder="Search name or phone"
+              placeholder="Search reference, name, email or phone"
               className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400 md:max-w-sm"
             />
           </div>
@@ -2816,6 +2932,7 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
             <tbody>
               {paginatedBookings.map((booking, index) => (
                 <tr key={index} className="border-t border-neutral-800">
+                  <td className="p-4 font-mono text-xs text-lime-300">{booking.bookingReference || "-"}</td>
                   <td className="p-4">{booking.date}</td>
                   <td className="p-4">{booking.time}</td>
                   <td className="p-4 font-semibold text-lime-300">
@@ -2853,22 +2970,26 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
                       </button>
                     )}
                   </td>
+                  <td className="p-4">{booking.customerEmail || "-"}</td>
+                  <td className="p-4">{booking.customerId ? <span className="text-lime-300">Linked</span> : <button type="button" onClick={() => linkLegacyBooking(booking)} className="text-amber-300" title="Match by verified email or phone before linking">Link to Customer Account</button>}</td>
                   <td className="p-4">{booking.players}</td>
                   <td className="p-4">{booking.duration}</td>
                   <td className="p-4">{booking.location}</td>
                   <td className="p-4">{booking.coachName || booking.coachEmail || "-"}</td>
                   <td className="p-4">{booking.paymentStatus}</td>
                   <td className="p-4">{booking.bookingStatus}</td>
+                  <td className="p-4 capitalize">{booking.confirmationEmailStatus || "-"}</td>
+                  <td className="p-4">{booking.pdfGenerated ? "Ready" : "-"}</td>
                   <td className="p-4">{booking.note}</td>
                   <td className="p-4">
                     {isSuperAdmin ? (
-                      <button
-                        type="button"
-                        onClick={() => setTransferBooking(booking)}
-                        className="rounded-xl bg-neutral-800 px-3 py-2 text-xs hover:bg-neutral-700"
-                      >
-                        Transfer Session
-                      </button>
+                      <div className="flex min-w-40 flex-col gap-2">
+                        <button type="button" onClick={() => setTransferBooking(booking)} className="rounded-xl bg-neutral-800 px-3 py-2 text-xs hover:bg-neutral-700">Transfer Session</button>
+                        {booking.status === "pending_confirmation" && <button type="button" onClick={() => manuallyConfirmBooking(booking)} className="rounded-xl bg-lime-400 px-3 py-2 text-xs font-semibold text-black">Confirm Manually</button>}
+                        {booking.status === "confirmed" && <button type="button" onClick={() => sendConfirmationEmail(booking)} className="rounded-xl bg-neutral-800 px-3 py-2 text-xs">Resend Email</button>}
+                        {booking.status === "confirmed" && <button type="button" onClick={() => downloadBookingPdf(booking)} className="rounded-xl bg-neutral-800 px-3 py-2 text-xs">Regenerate PDF</button>}
+                        {!['cancelled', 'expired'].includes(String(booking.status || booking.bookingStatus).toLowerCase()) && <button type="button" onClick={() => cancelAdminBooking(booking)} className="rounded-xl bg-red-500/20 px-3 py-2 text-xs text-red-200">Cancel Booking</button>}
+                      </div>
                     ) : (
                       <span className="text-neutral-500">-</span>
                     )}
@@ -2978,12 +3099,182 @@ function HomePage() {
   );
 }
 
+function CustomerHeader({ user, profile }) {
+  return (
+    <header className="mb-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+      <a href="/" className="font-bold text-lime-300">Ilham Tennis Academy</a>
+      <nav className="flex flex-wrap items-center gap-3 text-sm">
+        <a href="/booking" className="hover:text-lime-300">Book a Session</a>
+        <a href="/my-bookings" className="hover:text-lime-300">My Bookings</a>
+        <a href="/my-profile" className="hover:text-lime-300">My Profile</a>
+        {user?.photoURL && <img src={user.photoURL} alt="" className="h-8 w-8 rounded-full" referrerPolicy="no-referrer" />}
+        <span className="hidden sm:inline text-neutral-300">{profile?.fullName || user?.displayName}</span>
+        <button type="button" onClick={() => signOut(auth)} className="rounded-xl border border-neutral-700 px-3 py-2">Sign Out</button>
+      </nav>
+    </header>
+  );
+}
+
+function CustomerAccess({ user, profile, loading, children }) {
+  const isGoogleAccount = user?.providerData?.some((provider) => provider.providerId === "google.com") && !String(user?.email || "").endsWith("@ilham-booking.local");
+  const [fullName, setFullName] = useState(user?.displayName || "");
+  const [phone, setPhone] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  async function login() {
+    setMessage("");
+    try {
+      if (user && !isGoogleAccount) await signOut(auth);
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: "select_account" });
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      console.error(error);
+      setMessage("Google sign-in was not completed. Please try again.");
+    }
+  }
+
+  async function saveProfile() {
+    if (!user || !fullName.trim() || !phone.trim()) {
+      setMessage("Full name and phone number are required.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await setDoc(doc(db, "customers", user.uid), {
+        uid: user.uid,
+        fullName: fullName.trim(),
+        email: user.email || "",
+        phone: phone.trim(),
+        photoURL: user.photoURL || "",
+        provider: "google",
+        role: "customer",
+        profileCompleted: true,
+        createdAt: profile?.createdAt || serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+    } catch (error) {
+      console.error(error);
+      const errorCode = error?.code ? ` (${error.code})` : "";
+      setMessage(`Profile could not be saved${errorCode}. Check that the latest Firestore rules are deployed.`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) return <div className="min-h-screen bg-neutral-950 p-10 text-center text-white">Checking your account...</div>;
+  if (!user || !isGoogleAccount) return (
+    <div className="min-h-screen bg-neutral-950 px-4 py-16 text-white">
+      <div className="mx-auto max-w-lg rounded-3xl border border-neutral-800 bg-neutral-900 p-8 text-center">
+        <h1 className="text-3xl font-bold">Sign in to book</h1>
+        <p className="mt-3 text-neutral-400">Google sign-in is required before you can select or reserve a coaching slot.</p>
+        {user && !isGoogleAccount && <p className="mt-4 rounded-2xl border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-200">A coach/admin session is currently active. Continue with Google to switch to a customer account.</p>}
+        <button type="button" onClick={login} className="mt-7 w-full rounded-2xl bg-white py-4 font-semibold text-black">Continue with Google</button>
+        {message && <p className="mt-4 text-sm text-red-300">{message}</p>}
+      </div>
+    </div>
+  );
+  if (!profile?.profileCompleted) return (
+    <div className="min-h-screen bg-neutral-950 px-4 py-12 text-white">
+      <div className="mx-auto max-w-lg rounded-3xl border border-neutral-800 bg-neutral-900 p-8">
+        <h1 className="text-3xl font-bold">Complete your profile</h1>
+        <p className="mt-2 text-neutral-400">You only need to do this once.</p>
+        <label className="mt-6 block text-sm">Full Name</label>
+        <input value={fullName} onChange={(e) => setFullName(e.target.value)} className="mt-2 w-full rounded-2xl border border-neutral-700 bg-neutral-800 px-4 py-3" />
+        <label className="mt-4 block text-sm">Google Email</label>
+        <div className="mt-2 rounded-2xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-neutral-400">{user.email}</div>
+        <label className="mt-4 block text-sm">Phone Number</label>
+        <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" className="mt-2 w-full rounded-2xl border border-neutral-700 bg-neutral-800 px-4 py-3" />
+        <button type="button" disabled={saving} onClick={saveProfile} className="mt-6 w-full rounded-2xl bg-lime-400 py-4 font-semibold text-black disabled:opacity-50">{saving ? "Saving..." : "Save Profile"}</button>
+        {message && <p className="mt-4 text-sm text-red-300">{message}</p>}
+      </div>
+    </div>
+  );
+  return children;
+}
+
+function BookingDetails({ booking }) {
+  const rows = [
+    ["Customer", booking.customerName || booking.name],
+    ["Coach", booking.coachName],
+    ["Date", booking.date],
+    ["Time", `${booking.startTime || booking.time} - ${booking.endTime || getEndTime(booking.time, booking.duration)}`],
+    ["Duration", `${booking.durationHours || booking.duration} Hour(s)`],
+    ["Players", `${booking.players} Player(s)`],
+    ["Location", booking.location],
+    ["Court", booking.court || booking.courtOption || "-"],
+    ["Estimated Coaching Fee", `RM${booking.coachingFee ?? 0}`],
+    ["Booking Status", String(booking.status || booking.bookingStatus || "").replaceAll("_", " ")],
+  ];
+  return <dl className="divide-y divide-neutral-800">{rows.map(([label, value]) => <div key={label} className="grid gap-1 py-3 sm:grid-cols-2"><dt className="text-neutral-400">{label}</dt><dd className="font-medium capitalize">{value || "-"}</dd></div>)}</dl>;
+}
+
+function ConfirmationPage({ booking, user, profile, onConfirm, loading, status }) {
+  if (!booking || booking.customerId !== user?.uid) return <CustomerShell user={user} profile={profile}><p>Booking not found or you do not have access.</p></CustomerShell>;
+  const expiry = booking.confirmationExpiresAt?.toDate?.();
+  return <CustomerShell user={user} profile={profile} title="Review your booking">
+    <BookingDetails booking={booking} />
+    {expiry && <p className="mt-4 text-sm text-amber-300">This slot is reserved until {expiry.toLocaleTimeString("en-MY", { hour: "numeric", minute: "2-digit" })}.</p>}
+    <div className="mt-7 grid gap-3 sm:grid-cols-2">
+      <button type="button" onClick={() => onConfirm(booking)} disabled={loading} className="rounded-2xl bg-lime-400 py-4 font-semibold text-black disabled:opacity-50">{loading ? "Confirming..." : "Confirm Booking"}</button>
+      <a href={`/booking?edit=${booking.id}`} className="rounded-2xl border border-neutral-700 py-4 text-center font-semibold">Edit Booking</a>
+    </div>
+    {status && <p className="mt-4 text-sm text-neutral-300">{status}</p>}
+  </CustomerShell>;
+}
+
+function CustomerShell({ user, profile, title, children }) {
+  return <div className="min-h-screen bg-neutral-950 px-4 py-6 text-white"><div className="mx-auto max-w-4xl"><CustomerHeader user={user} profile={profile} /><main className="rounded-3xl border border-neutral-800 bg-neutral-900 p-6 sm:p-8">{title && <h1 className="mb-6 text-3xl font-bold">{title}</h1>}{children}</main></div></div>;
+}
+
+function SuccessPage({ booking, user, profile }) {
+  if (!booking || booking.customerId !== user?.uid || String(booking.status).toLowerCase() !== "confirmed") return <CustomerShell user={user} profile={profile}><p>Confirmed booking not found.</p></CustomerShell>;
+  return <CustomerShell user={user} profile={profile} title="Booking Confirmed">
+    <p className="text-lg text-neutral-300">Your booking has been successfully confirmed.</p>
+    <div className="my-6 rounded-2xl bg-lime-400/10 p-5"><p className="text-sm text-lime-300">Booking Reference</p><p className="mt-1 text-2xl font-bold text-lime-300">{booking.bookingReference}</p></div>
+    <BookingDetails booking={booking} />
+    <div className="mt-7 grid gap-3 sm:grid-cols-3">
+      <button type="button" onClick={() => downloadBookingPdf(booking)} className="rounded-2xl bg-white py-3 font-semibold text-black">Download Booking PDF</button>
+      <a href="/my-bookings" className="rounded-2xl border border-neutral-700 py-3 text-center font-semibold">View My Bookings</a>
+      <a href="/booking" className="rounded-2xl border border-neutral-700 py-3 text-center font-semibold">Book Another Session</a>
+    </div>
+    <a className="mt-4 block text-center text-sm text-lime-300" target="_blank" href={`https://wa.me/601137507963?text=${encodeURIComponent(`Hi Coach, regarding booking ${booking.bookingReference}`)}`}>Contact Coach on WhatsApp</a>
+  </CustomerShell>;
+}
+
+function MyBookingsPage({ bookings, user, profile }) {
+  const own = bookings.filter((booking) => booking.customerId === user?.uid && !booking.isSlotLock);
+  const groups = [
+    ["Pending Confirmation", own.filter((b) => b.status === "pending_confirmation")],
+    ["Upcoming Bookings", own.filter((b) => ["confirmed"].includes(b.status) && b.date >= formatDate(new Date()))],
+    ["Past Bookings", own.filter((b) => ["confirmed", "completed"].includes(b.status) && b.date < formatDate(new Date()))],
+    ["Cancelled Bookings", own.filter((b) => ["cancelled", "expired"].includes(b.status))],
+  ];
+  return <CustomerShell user={user} profile={profile} title="My Bookings">{groups.map(([title, items]) => <section key={title} className="mb-8"><h2 className="mb-3 text-xl font-semibold">{title}</h2><div className="grid gap-4 sm:grid-cols-2">{items.map((booking) => <article key={booking.id} className="rounded-2xl border border-neutral-800 bg-neutral-950 p-5"><p className="text-sm text-lime-300">{booking.bookingReference || "Awaiting confirmation"}</p><h3 className="mt-1 font-semibold">{booking.coachName}</h3><p className="mt-2 text-sm text-neutral-400">{booking.date} · {booking.time} · {booking.duration} hour(s)</p><p className="text-sm text-neutral-400">{booking.location}</p><div className="mt-4 flex flex-wrap gap-2 text-sm"><a href={`/my-bookings/${booking.id}`} className="rounded-xl border border-neutral-700 px-3 py-2">View Details</a>{booking.status === "confirmed" && <button type="button" onClick={() => downloadBookingPdf(booking)} className="rounded-xl border border-neutral-700 px-3 py-2">Download PDF</button>}{booking.status === "pending_confirmation" && <a href={`/booking/confirm/${booking.id}`} className="rounded-xl bg-lime-400 px-3 py-2 font-semibold text-black">Continue Confirmation</a>}{["expired", "cancelled"].includes(booking.status) && <a href="/booking" className="rounded-xl border border-neutral-700 px-3 py-2">Book Again</a>}</div></article>)}{items.length === 0 && <p className="text-sm text-neutral-500">No bookings in this section.</p>}</div></section>)}</CustomerShell>;
+}
+
+function BookingDetailPage({ booking, user, profile }) {
+  if (!booking || booking.customerId !== user?.uid) return <CustomerShell user={user} profile={profile}><p>Booking not found.</p></CustomerShell>;
+  return <CustomerShell user={user} profile={profile} title={booking.bookingReference || "Booking Detail"}><BookingDetails booking={booking} />{booking.status === "confirmed" && <button type="button" onClick={() => downloadBookingPdf(booking)} className="mt-6 rounded-2xl bg-white px-5 py-3 font-semibold text-black">Download Booking PDF</button>}</CustomerShell>;
+}
+
+function ProfilePage({ user, profile }) {
+  const [fullName, setFullName] = useState(profile?.fullName || "");
+  const [phone, setPhone] = useState(profile?.phone || "");
+  const [status, setStatus] = useState("");
+  async function save() {
+    if (!fullName.trim() || !phone.trim()) return setStatus("Full name and phone are required.");
+    await updateDoc(doc(db, "customers", user.uid), { fullName: fullName.trim(), phone: phone.trim(), updatedAt: serverTimestamp() });
+    setStatus("Profile saved.");
+  }
+  return <CustomerShell user={user} profile={profile} title="My Profile"><label className="block text-sm">Full Name</label><input value={fullName} onChange={(e) => setFullName(e.target.value)} className="mt-2 w-full rounded-2xl border border-neutral-700 bg-neutral-800 px-4 py-3" /><label className="mt-5 block text-sm">Google Email</label><div className="mt-2 rounded-2xl border border-neutral-800 bg-neutral-950 px-4 py-3 text-neutral-400">{user.email}</div><label className="mt-5 block text-sm">Phone Number</label><input value={phone} onChange={(e) => setPhone(e.target.value)} className="mt-2 w-full rounded-2xl border border-neutral-700 bg-neutral-800 px-4 py-3" /><button type="button" onClick={save} className="mt-6 rounded-2xl bg-lime-400 px-6 py-3 font-semibold text-black">Save Profile</button>{status && <p className="mt-3 text-sm">{status}</p>}</CustomerShell>;
+}
+
 function BookingPage({
   selectedService,
-  name,
-  setName,
-  phone,
-  setPhone,
+  customer,
+  user,
   selectedCoachId,
   setSelectedCoachId,
   publicCoachOptions,
@@ -3022,9 +3313,7 @@ function BookingPage({
           <a href="/" className="rounded-full border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-lime-400 hover:text-lime-300 transition">
             Back
           </a>
-          <a href="/admin" className="rounded-full border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-lime-400 hover:text-lime-300 transition">
-            Coach Login
-          </a>
+          <div className="flex items-center gap-3"><a href="/my-bookings" className="text-sm text-neutral-300 hover:text-lime-300">My Bookings</a><button type="button" onClick={() => signOut(auth)} className="rounded-full border border-neutral-700 px-4 py-2 text-sm">Sign Out</button></div>
         </div>
 
         <div className="mb-8">
@@ -3042,8 +3331,7 @@ function BookingPage({
             <h2 className="text-2xl font-semibold mb-6">Booking Form</h2>
 
             <div className="space-y-4">
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your Name" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
-              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone Number" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
+              <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-4"><p className="text-xs uppercase tracking-wide text-neutral-500">Booking For</p><p className="mt-2 font-semibold">{customer.fullName}</p><p className="text-sm text-neutral-400">{user.email}</p><p className="text-sm text-neutral-400">{customer.phone}</p></div>
               <select
                 value={selectedCoachId}
                 onChange={(e) => setSelectedCoachId(e.target.value)}
@@ -3221,9 +3509,17 @@ export default function App() {
   const searchParams = new URLSearchParams(window.location.search);
   const isAdminPage = currentPath === "/admin";
   const isBookingPage = currentPath === "/booking";
+  const confirmationBookingId = currentPath.match(/^\/booking\/confirm\/([^/]+)$/)?.[1] || "";
+  const successBookingId = currentPath.match(/^\/booking\/success\/([^/]+)$/)?.[1] || "";
+  const detailBookingId = currentPath.match(/^\/my-bookings\/([^/]+)$/)?.[1] || "";
+  const isCustomerPage = isBookingPage || Boolean(confirmationBookingId || successBookingId || detailBookingId) || ["/my-bookings", "/my-profile"].includes(currentPath);
+  const editBookingId = searchParams.get("edit") || "";
   const selectedService = getServiceById(searchParams.get("service"));
+  // Kept for the legacy, unreachable booking markup below until that historical block is removed.
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  void name;
+  void phone;
   const [players, setPlayers] = useState(1);
   const [duration, setDuration] = useState("1");
   const [date, setDate] = useState(formatDate(new Date()));
@@ -3241,10 +3537,17 @@ export default function App() {
   const [users, setUsers] = useState([]);
   const [adminUser, setAdminUser] = useState(null);
   const [adminProfile, setAdminProfile] = useState(null);
+  const [customerProfile, setCustomerProfile] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
   const [calendarMonth, setCalendarMonth] = useState(new Date());
+  const [draftBookingId] = useState(() => doc(collection(db, "bookings")).id);
+  const submittingRef = useRef(false);
+  const customerBookingDataRef = useRef({ own: [], locks: [] });
+  const syncedLegacyBookingIdsRef = useRef(new Set());
+  const expiringBookingIdsRef = useRef(new Set());
+  const staleLockCleanupStartedRef = useRef(false);
 
   const durationHours = getBookingDuration({ duration });
   const price = useMemo(() => calculateCoachingFee(players, durationHours), [players, durationHours]);
@@ -3319,11 +3622,27 @@ export default function App() {
     });
   }, [coaches]);
   const selectedCoach = publicCoachOptions.find((coach) => coach.coachId === selectedCoachId) || null;
+  const selectedCoachAvailabilityIds = useMemo(() => {
+    if (!selectedCoachId) return [];
+
+    const selectedCoachRecord = coaches.find((coach) => coach.coachId === selectedCoachId);
+    const coachName = selectedCoachRecord?.coachName || selectedCoachRecord?.name || selectedCoach?.coachName || "";
+    const ids = new Set([selectedCoachId]);
+
+    if (selectedCoachRecord?.id) ids.add(selectedCoachRecord.id);
+    if (isPrimaryIlhamCoachName(coachName) || selectedCoachRecord?.role === roles.SUPER_ADMIN) {
+      ids.add("UID_SUPER_ADMIN");
+      ids.add("");
+    }
+
+    return Array.from(ids);
+  }, [coaches, selectedCoach, selectedCoachId]);
 
   function refreshBookings() {
     setStatus("Bookings update automatically from Firebase.");
   }
 
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (availableSlots.length === 0) {
       setTime("");
@@ -3334,6 +3653,7 @@ export default function App() {
       setTime(availableSlots[0]);
     }
   }, [availableSlots, time]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (nextUser) => {
@@ -3341,11 +3661,42 @@ export default function App() {
 
       if (!nextUser) {
         setAdminProfile(null);
+        setCustomerProfile(null);
         setAuthLoading(false);
         return;
       }
 
       try {
+        if (!isAdminPage) {
+          const isGoogleAccount = nextUser.providerData.some((provider) => provider.providerId === "google.com") && !String(nextUser.email || "").endsWith("@ilham-booking.local");
+          if (!isGoogleAccount) {
+            setCustomerProfile(null);
+            return;
+          }
+          const customerRef = doc(db, "customers", nextUser.uid);
+          const customerSnapshot = await getDoc(customerRef);
+          const existingCustomer = customerSnapshot.exists() ? customerSnapshot.data() : null;
+          if (!existingCustomer) {
+            const initialCustomer = {
+              uid: nextUser.uid,
+              fullName: nextUser.displayName || "",
+              email: nextUser.email || "",
+              phone: "",
+              photoURL: nextUser.photoURL || "",
+              provider: "google",
+              role: "customer",
+              profileCompleted: false,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            };
+            await setDoc(customerRef, initialCustomer);
+            setCustomerProfile(initialCustomer);
+          } else {
+            setCustomerProfile(existingCustomer);
+          }
+          return;
+        }
+
         const defaultProfile = getDefaultAdminProfile(nextUser);
         const userRef = doc(db, "users", nextUser.uid);
         const userSnapshot = await getDoc(userRef);
@@ -3398,38 +3749,177 @@ export default function App() {
     });
 
     return unsubscribe;
-  }, []);
+  }, [isAdminPage]);
+
+  /* Loading an existing pending draft intentionally hydrates the controlled form. */
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (!editBookingId || !adminUser) return;
+    const booking = bookings.find((item) => item.id === editBookingId && item.customerId === adminUser.uid && item.status === "pending_confirmation");
+    if (!booking) return;
+    setPlayers(Number(booking.players || 1));
+    setDuration(String(booking.durationHours || booking.duration || 1));
+    setDate(booking.date || formatDate(new Date()));
+    setTime(booking.startTime || booking.time || "");
+    setLocation(booking.location || "Tennis Nusa Duta");
+    setCourtOption(booking.court || booking.courtOption || "");
+    setSelectedCoachId(booking.coachId || "");
+    setNote(booking.notes || booking.note || "");
+  }, [adminUser, bookings, editBookingId]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
-    const unsubscribe = onSnapshot(
-      collection(db, "bookings"),
-      (snapshot) => {
-        const nextBookings = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
+    if (!adminUser || isAdminPage) return undefined;
+    return onSnapshot(doc(db, "customers", adminUser.uid), (snapshot) => {
+      if (snapshot.exists()) setCustomerProfile(snapshot.data());
+    });
+  }, [adminUser, isAdminPage]);
 
-        nextBookings.sort((a, b) => {
-          const dateCompare = String(a.date || "").localeCompare(String(b.date || ""));
-          if (dateCompare !== 0) return dateCompare;
-          return allTimeSlots.indexOf(a.time) - allTimeSlots.indexOf(b.time);
+  useEffect(() => {
+    if (!isAdminPage || getUserRole(adminProfile) !== roles.SUPER_ADMIN) return;
+    const unsynced = bookings.filter((booking) => !syncedLegacyBookingIdsRef.current.has(booking.id) && isReservedBooking(booking));
+    if (unsynced.length === 0) return;
+
+    async function backfillAvailabilityLocks() {
+      const migrationRef = doc(db, "system", "availabilityLocksV1");
+      const migrationSnapshot = await getDoc(migrationRef);
+      if (migrationSnapshot.exists()) return;
+      unsynced.forEach((booking) => syncedLegacyBookingIdsRef.current.add(booking.id));
+      const writes = [];
+      unsynced.forEach((booking) => {
+        getRequestedSlotKeys(booking.date, booking.startTime || booking.time, booking.durationHours || booking.duration).forEach((slot) => writes.push({ booking, slot }));
+      });
+      for (let offset = 0; offset < writes.length; offset += 400) {
+        const batch = writeBatch(db);
+        writes.slice(offset, offset + 400).forEach(({ booking, slot }) => {
+          batch.set(doc(db, "availabilityLocks", getSlotLockId(booking.coachId || booking.createdBy, booking.date, slot)), {
+            bookingId: booking.id,
+            customerId: booking.customerId || "",
+            coachId: booking.coachId || booking.createdBy || "",
+            date: booking.date,
+            time: getAvailabilityLockTime({ date: booking.date, time: slot }),
+            status: String(booking.status || booking.type || "confirmed").toLowerCase() === "blocked" ? "blocked" : "confirmed",
+            confirmationExpiresAt: null,
+            updatedAt: serverTimestamp(),
+          }, { merge: true });
         });
-
-        setBookings(nextBookings);
-        setStatus("");
-      },
-      (error) => {
-        console.error(error);
-        setStatus("Could not load Firebase bookings. Please check Firebase config and Firestore rules.");
+        await batch.commit();
       }
-    );
-
-    return unsubscribe;
-  }, []);
+      await setDoc(migrationRef, {
+        completed: true,
+        bookingCount: unsynced.length,
+        completedAt: serverTimestamp(),
+        completedBy: adminUser?.uid || "",
+      });
+    }
+    backfillAvailabilityLocks().catch((error) => console.error("Availability lock backfill failed", error));
+  }, [adminProfile, adminUser, bookings, isAdminPage]);
 
   useEffect(() => {
+    if (!isAdminPage || getUserRole(adminProfile) !== roles.SUPER_ADMIN || bookings.length === 0 || staleLockCleanupStartedRef.current) return;
+    staleLockCleanupStartedRef.current = true;
+
+    async function cleanupStaleAvailabilityLocks() {
+      const cleanupRef = doc(db, "system", "availabilityLockCleanupV2");
+      const cleanupSnapshot = await getDoc(cleanupRef);
+      if (cleanupSnapshot.exists()) return;
+
+      const bookingsById = new Map(bookings.map((booking) => [booking.id, booking]));
+      const lockSnapshot = await getDocs(collection(db, "availabilityLocks"));
+      const staleLocks = lockSnapshot.docs.filter((lockDoc) => {
+        const bookingId = lockDoc.data().bookingId;
+        if (!bookingId) return false;
+        const booking = bookingsById.get(bookingId);
+        return !booking || !isReservedBooking(booking);
+      });
+
+      for (let offset = 0; offset < staleLocks.length; offset += 400) {
+        const batch = writeBatch(db);
+        staleLocks.slice(offset, offset + 400).forEach((lockDoc) => batch.delete(lockDoc.ref));
+        await batch.commit();
+      }
+
+      await setDoc(cleanupRef, {
+        completed: true,
+        removedLockCount: staleLocks.length,
+        completedAt: serverTimestamp(),
+        completedBy: adminUser?.uid || "",
+      });
+    }
+
+    cleanupStaleAvailabilityLocks().catch((error) => {
+      staleLockCleanupStartedRef.current = false;
+      console.error("Stale availability lock cleanup failed", error);
+    });
+  }, [adminProfile, adminUser, bookings, isAdminPage]);
+
+  useEffect(() => {
+    if (!adminUser || isAdminPage) return;
+    bookings.filter((booking) => !booking.isSlotLock && booking.customerId === adminUser.uid && booking.status === "pending_confirmation" && (booking.confirmationExpiresAt?.toMillis?.() || Infinity) <= Date.now() && !expiringBookingIdsRef.current.has(booking.id)).forEach((booking) => {
+      expiringBookingIdsRef.current.add(booking.id);
+      runTransaction(db, async (transaction) => {
+        const bookingRef = doc(db, "bookings", booking.id);
+        const currentSnapshot = await transaction.get(bookingRef);
+        if (!currentSnapshot.exists()) return;
+        const current = currentSnapshot.data();
+        if (current.status !== "pending_confirmation" || (current.confirmationExpiresAt?.toMillis?.() || Infinity) > Date.now()) return;
+        const lockRefs = getRequestedSlotKeys(current.date, current.startTime || current.time, current.durationHours || current.duration).map((slot) => doc(db, "availabilityLocks", getSlotLockId(current.coachId, current.date, slot)));
+        const locks = [];
+        for (const lockRef of lockRefs) locks.push(await transaction.get(lockRef));
+        transaction.update(bookingRef, { status: "expired", bookingStatus: "Expired", updatedAt: serverTimestamp() });
+        lockRefs.forEach((lockRef, index) => { if (locks[index].exists() && locks[index].data().bookingId === booking.id) transaction.delete(lockRef); });
+      }).catch((error) => { expiringBookingIdsRef.current.delete(booking.id); console.error("Expired booking cleanup failed", error); });
+    });
+  }, [adminUser, bookings, isAdminPage]);
+
+  useEffect(() => {
+    if (!adminUser) {
+      return undefined;
+    }
+    const sortAndSet = (items) => setBookings([...items].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || allTimeSlots.indexOf(a.time) - allTimeSlots.indexOf(b.time)));
+    if (isAdminPage) {
+      if (!adminProfile) return undefined;
+      const bookingSource = getUserRole(adminProfile) === roles.SUPER_ADMIN ? collection(db, "bookings") : query(collection(db, "bookings"), where("coachId", "==", getCoachId(adminUser, adminProfile)));
+      return onSnapshot(bookingSource, (snapshot) => {
+        sortAndSet(snapshot.docs.map((bookingDoc) => ({ id: bookingDoc.id, ...bookingDoc.data() })));
+      }, (error) => { console.error(error); setStatus("Could not load Firebase bookings. Please check Firebase config and Firestore rules."); });
+    }
+
+    const updateCustomerBookings = () => sortAndSet([...customerBookingDataRef.current.own, ...customerBookingDataRef.current.locks]);
+    const unsubscribeOwn = onSnapshot(query(collection(db, "bookings"), where("customerId", "==", adminUser.uid)), (snapshot) => {
+      customerBookingDataRef.current.own = snapshot.docs.map((bookingDoc) => ({ id: bookingDoc.id, ...bookingDoc.data() }));
+      updateCustomerBookings();
+    }, console.error);
+    let unsubscribeLocks = () => {};
+    if (selectedCoachId && selectedCoachAvailabilityIds.length > 0) {
+      const lockSource = selectedCoachAvailabilityIds.length === 1
+        ? query(collection(db, "availabilityLocks"), where("coachId", "==", selectedCoachId))
+        : query(collection(db, "availabilityLocks"), where("coachId", "in", selectedCoachAvailabilityIds));
+      unsubscribeLocks = onSnapshot(lockSource, (snapshot) => {
+        customerBookingDataRef.current.locks = snapshot.docs.map((lockDoc) => ({
+          id: `lock-${lockDoc.id}`,
+          ...lockDoc.data(),
+          sourceCoachId: lockDoc.data().coachId || "",
+          coachId: selectedCoachId,
+          time: getAvailabilityLockTime(lockDoc.data()),
+          duration: 1,
+          bookingStatus: lockDoc.data().status,
+          isSlotLock: true,
+        }));
+        updateCustomerBookings();
+      }, console.error);
+    } else {
+      customerBookingDataRef.current.locks = [];
+      updateCustomerBookings();
+    }
+    return () => { unsubscribeOwn(); unsubscribeLocks(); };
+  }, [adminProfile, adminUser, isAdminPage, selectedCoachAvailabilityIds, selectedCoachId]);
+
+  useEffect(() => {
+    if (!adminUser || !isAdminPage || !adminProfile) return undefined;
+    const packageSource = getUserRole(adminProfile) === roles.SUPER_ADMIN ? collection(db, "packages") : query(collection(db, "packages"), where("coachId", "==", getCoachId(adminUser, adminProfile)));
     const unsubscribe = onSnapshot(
-      collection(db, "packages"),
+      packageSource,
       (snapshot) => {
         const nextPackages = snapshot.docs.map((packageDoc) => ({
           id: packageDoc.id,
@@ -3449,9 +3939,10 @@ export default function App() {
     );
 
     return unsubscribe;
-  }, []);
+  }, [adminProfile, adminUser, isAdminPage]);
 
   useEffect(() => {
+    if (!adminUser || !isAdminPage || getUserRole(adminProfile) !== roles.SUPER_ADMIN) return undefined;
     const unsubscribe = onSnapshot(
       collection(db, "notifications"),
       (snapshot) => {
@@ -3474,9 +3965,10 @@ export default function App() {
     );
 
     return unsubscribe;
-  }, []);
+  }, [adminProfile, adminUser, isAdminPage]);
 
   useEffect(() => {
+    if (!adminUser) return undefined;
     const unsubscribe = onSnapshot(
       collection(db, "coaches"),
       (snapshot) => {
@@ -3495,9 +3987,10 @@ export default function App() {
     );
 
     return unsubscribe;
-  }, []);
+  }, [adminUser]);
 
   useEffect(() => {
+    if (!adminUser || !isAdminPage || getUserRole(adminProfile) !== roles.SUPER_ADMIN) return undefined;
     const unsubscribe = onSnapshot(
       collection(db, "transferLogs"),
       (snapshot) => {
@@ -3520,9 +4013,10 @@ export default function App() {
     );
 
     return unsubscribe;
-  }, []);
+  }, [adminProfile, adminUser, isAdminPage]);
 
   useEffect(() => {
+    if (!adminUser || !isAdminPage || getUserRole(adminProfile) !== roles.SUPER_ADMIN) return undefined;
     const unsubscribe = onSnapshot(
       collection(db, "users"),
       (snapshot) => {
@@ -3541,11 +4035,13 @@ export default function App() {
     );
 
     return unsubscribe;
-  }, []);
+  }, [adminProfile, adminUser, isAdminPage]);
 
   useEffect(() => {
+    if (!adminUser || !isAdminPage || !adminProfile) return undefined;
+    const leaveRequestSource = getUserRole(adminProfile) === roles.SUPER_ADMIN ? collection(db, "leaveRequests") : query(collection(db, "leaveRequests"), where("coachId", "==", getCoachId(adminUser, adminProfile)));
     const unsubscribe = onSnapshot(
-      collection(db, "leaveRequests"),
+      leaveRequestSource,
       (snapshot) => {
         const nextRequests = snapshot.docs.map((requestDoc) => ({
           id: requestDoc.id,
@@ -3566,11 +4062,16 @@ export default function App() {
     );
 
     return unsubscribe;
-  }, []);
+  }, [adminProfile, adminUser, isAdminPage]);
 
   async function submitBooking() {
-    if (!name || !phone || !date || !selectedBookingTime || !selectedCoach) {
-      setStatus("Please fill in name, phone, date, time and coach.");
+    if (submittingRef.current) return;
+    if (!adminUser || !customerProfile?.profileCompleted) {
+      setStatus("Please sign in and complete your profile first.");
+      return;
+    }
+    if (!date || !selectedBookingTime || !selectedCoach) {
+      setStatus("Please select a date, time and coach.");
       return;
     }
 
@@ -3585,19 +4086,37 @@ export default function App() {
     }
 
 
+    const expiresAt = Timestamp.fromMillis(Date.now() + 10 * 60 * 1000);
+    const bookingId = editBookingId || draftBookingId;
+    const bookingRef = doc(db, "bookings", bookingId);
+    const requestedSlots = getRequestedSlotKeys(date, selectedBookingTime, durationHours);
     const bookingData = {
-      name,
-      phone,
+      customerId: adminUser.uid,
+      customerName: customerProfile.fullName,
+      customerEmail: adminUser.email || customerProfile.email,
+      customerPhone: customerProfile.phone,
+      name: customerProfile.fullName,
+      phone: customerProfile.phone,
       date,
       time: selectedBookingTime,
+      startTime: selectedBookingTime,
+      endTime: getEndTime(selectedBookingTime, durationHours),
       players,
       duration: durationHours,
+      durationHours,
       location,
       courtOption: location === "Tennis Nusa Duta" ? courtOption : "",
+      court: location === "Tennis Nusa Duta" ? courtOption : "",
       coachingFee: price,
       paymentStatus: "Unpaid",
-      bookingStatus: "Confirmed",
+      bookingStatus: "Pending Confirmation",
+      status: "pending_confirmation",
+      confirmationExpiresAt: expiresAt,
+      confirmationEmailSent: false,
+      confirmationEmailStatus: "pending",
+      pdfGenerated: false,
       note,
+      notes: note,
       type: "booking",
       serviceType: selectedService?.id || "",
       serviceName: selectedService?.title || "",
@@ -3606,102 +4125,134 @@ export default function App() {
       coachId: selectedCoach.coachId,
       coachName: selectedCoach.coachName,
       coachEmail: selectedCoach.coachEmail,
-      role: "public",
-      createdAt: serverTimestamp(),
+      role: "customer",
       updatedAt: serverTimestamp(),
     };
 
+    submittingRef.current = true;
     setLoading(true);
-    setStatus("Saving booking...");
+    setStatus("Reserving your slot...");
 
     try {
-      const bookingRef = await addDoc(collection(db, "bookings"), bookingData);
+      await runTransaction(db, async (transaction) => {
+        const existingSnapshot = editBookingId ? await transaction.get(bookingRef) : null;
+        const existing = existingSnapshot?.exists() ? existingSnapshot.data() : null;
+        if (existing && existing.customerId !== adminUser.uid) throw new Error("You cannot edit this booking.");
+        if (existing && existing.status !== "pending_confirmation") throw new Error("Only a pending booking can be edited.");
 
-      if (shouldSendBookingNotification(bookingData)) {
-        const notificationPayload = {
-          name,
-          phone,
+        const oldSlots = existing ? getRequestedSlotKeys(existing.date, existing.startTime || existing.time, existing.durationHours || existing.duration) : [];
+        const allKeys = [...new Set([...oldSlots, ...requestedSlots])];
+        const lockRefs = allKeys.map((slot) => doc(db, "availabilityLocks", getSlotLockId(selectedCoach.coachId, date, slot)));
+        const lockSnapshots = [];
+        for (const lockRef of lockRefs) lockSnapshots.push(await transaction.get(lockRef));
+
+        requestedSlots.forEach((slot) => {
+          const lockId = getSlotLockId(selectedCoach.coachId, date, slot);
+          const index = lockRefs.findIndex((ref) => ref.id === lockId);
+          const lock = lockSnapshots[index]?.data();
+          const lockExpiry = lock?.confirmationExpiresAt?.toMillis?.() || 0;
+          if (lock && lock.bookingId !== bookingId && lock.status !== "expired" && (lock.status !== "pending_confirmation" || lockExpiry > Date.now())) {
+            throw new Error("This slot is no longer available. Please select another time.");
+          }
+        });
+
+        transaction.set(bookingRef, { ...bookingData, createdAt: existing?.createdAt || serverTimestamp() }, { merge: true });
+        oldSlots.filter((slot) => !requestedSlots.includes(slot)).forEach((slot) => transaction.delete(doc(db, "availabilityLocks", getSlotLockId(existing.coachId, existing.date, slot))));
+        requestedSlots.forEach((slot) => transaction.set(doc(db, "availabilityLocks", getSlotLockId(selectedCoach.coachId, date, slot)), {
+          bookingId,
+          customerId: adminUser.uid,
+          coachId: selectedCoach.coachId,
           date,
-          time: selectedBookingTime,
-          players,
-          duration: durationHours,
-          location,
-          courtOption: bookingData.courtOption,
-          paymentStatus: bookingData.paymentStatus,
-          serviceType: bookingData.serviceType,
-          serviceName: bookingData.serviceName,
-          note,
-        };
+          time: getAvailabilityLockTime({ date, time: slot }),
+          status: "pending_confirmation",
+          confirmationExpiresAt: expiresAt,
+          updatedAt: serverTimestamp(),
+        }));
+      });
 
-        await addDoc(collection(db, "notifications"), {
-          type: "new_booking",
-          title: "New Booking",
-          message: `${name} booked ${date} at ${selectedBookingTime}`,
-          ...notificationPayload,
-          bookingId: bookingRef.id,
-          isRead: false,
-          createdAt: serverTimestamp(),
-        });
-
-        fetch("/api/send-booking-notification", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(notificationPayload),
-        }).catch((error) => {
-          console.error("Booking notification delivery failed", error);
-        });
-      }
-
-      const whatsappMessage = encodeURIComponent(
-        `Hi Coach Ilham, I want to book a tennis coaching slot.
-
-` +
-        `Name: ${name}
-` +
-        `Phone: ${phone}
-` +
-        `Date: ${date}
-` +
-        `Time: ${selectedBookingTime}
-` +
-        `Coach: ${selectedCoach.coachName}
-` +
-        `Service: ${selectedService?.title || "-"}
-` +
-        `Players: ${players}
-` +
-        `Duration: ${durationHours} hour(s)
-` +
-        `Location: ${location}
-` +
-        `Court Option: ${bookingData.courtOption || "-"}
-` +
-        `Coaching Fee: RM${price}
-` +
-        `Payment Status: Unpaid
-` +
-        `Booking Status: Pending
-
-` +
-        `Note: ${note || "-"}`
-      );
-
-      setStatus("Booking saved. Opening WhatsApp...");
-      window.open(`https://wa.me/601137507963?text=${whatsappMessage}`, "_blank");
-      const courtBookingUrl = getCourtBookingUrl(location, courtOption);
-      if (courtBookingUrl) {
-        window.open(courtBookingUrl, "_blank");
-      }
-
-      setName("");
-      setPhone("");
-      setSelectedCoachId("");
-      setCourtOption("");
-      setNote("");
+      window.location.assign(`/booking/confirm/${bookingId}`);
     } catch (error) {
       console.error(error);
-      setStatus("Booking failed. Please WhatsApp Coach Ilham directly.");
+      setStatus(error instanceof Error ? error.message : "Booking could not be reserved.");
     } finally {
+      submittingRef.current = false;
+      setLoading(false);
+    }
+  }
+
+  async function confirmBooking(booking) {
+    if (!adminUser || !booking || submittingRef.current) return;
+    submittingRef.current = true;
+    setLoading(true);
+    setStatus("Checking availability and confirming...");
+    let shouldSendEmail = false;
+    let confirmedBooking = null;
+    let reservationExpired = false;
+    try {
+      await runTransaction(db, async (transaction) => {
+        const bookingRef = doc(db, "bookings", booking.id);
+        const snapshot = await transaction.get(bookingRef);
+        if (!snapshot.exists()) throw new Error("Booking not found.");
+        const current = snapshot.data();
+        if (current.customerId !== adminUser.uid) throw new Error("You do not have access to this booking.");
+        if (current.status === "confirmed") {
+          confirmedBooking = { id: booking.id, ...current };
+          return;
+        }
+        if (current.status !== "pending_confirmation") throw new Error("This booking can no longer be confirmed.");
+        const slots = getRequestedSlotKeys(current.date, current.startTime || current.time, current.durationHours || current.duration);
+        const lockRefs = slots.map((slot) => doc(db, "availabilityLocks", getSlotLockId(current.coachId, current.date, slot)));
+        const lockSnapshots = [];
+        for (const lockRef of lockRefs) lockSnapshots.push(await transaction.get(lockRef));
+        if ((current.confirmationExpiresAt?.toMillis?.() || 0) <= Date.now()) {
+          transaction.update(bookingRef, { status: "expired", bookingStatus: "Expired", updatedAt: serverTimestamp() });
+          lockRefs.forEach((lockRef, index) => { if (lockSnapshots[index].exists() && lockSnapshots[index].data().bookingId === booking.id) transaction.delete(lockRef); });
+          reservationExpired = true;
+          return;
+        }
+        if (lockSnapshots.some((lock) => !lock.exists() || lock.data().bookingId !== booking.id)) {
+          throw new Error("This slot is no longer available. Please select another time.");
+        }
+
+        const bookingReference = current.bookingReference || getBookingReference(booking.id, current.date);
+        const updates = {
+          status: "confirmed",
+          bookingStatus: "Confirmed",
+          bookingReference,
+          confirmedAt: serverTimestamp(),
+          pdfGenerated: true,
+          confirmationEmailStatus: current.confirmationEmailSent ? "sent" : "pending",
+          updatedAt: serverTimestamp(),
+        };
+        transaction.update(bookingRef, updates);
+        lockRefs.forEach((lockRef) => transaction.update(lockRef, { status: "confirmed", confirmationExpiresAt: null, updatedAt: serverTimestamp() }));
+        shouldSendEmail = !current.confirmationEmailSent;
+        confirmedBooking = { id: booking.id, ...current, ...updates };
+      });
+
+      if (reservationExpired) throw new Error("Your reservation has expired. Please select the slot again.");
+
+      if (shouldSendEmail && confirmedBooking) {
+        try {
+          const token = await adminUser.getIdToken();
+          const response = await fetch("/api/send-booking-confirmation", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ bookingId: booking.id }),
+          });
+          if (!response.ok) throw new Error("Email delivery failed");
+          await updateDoc(doc(db, "bookings", booking.id), { confirmationEmailSent: true, confirmationEmailSentAt: serverTimestamp(), confirmationEmailStatus: "sent", updatedAt: serverTimestamp() });
+        } catch (emailError) {
+          console.error(emailError);
+          await updateDoc(doc(db, "bookings", booking.id), { confirmationEmailStatus: "failed", updatedAt: serverTimestamp() });
+        }
+      }
+      window.location.assign(`/booking/success/${booking.id}`);
+    } catch (error) {
+      console.error(error);
+      setStatus(error instanceof Error ? error.message : "Booking could not be confirmed.");
+    } finally {
+      submittingRef.current = false;
       setLoading(false);
     }
   }
@@ -3744,14 +4295,13 @@ export default function App() {
     );
   }
 
-  if (isBookingPage) {
-    return (
+  if (isCustomerPage) {
+    let page = null;
+    if (isBookingPage) page = (
       <BookingPage
         selectedService={selectedService}
-        name={name}
-        setName={setName}
-        phone={phone}
-        setPhone={setPhone}
+        customer={customerProfile}
+        user={adminUser}
         selectedCoachId={selectedCoachId}
         setSelectedCoachId={setSelectedCoachId}
         publicCoachOptions={publicCoachOptions}
@@ -3782,10 +4332,17 @@ export default function App() {
         selectedCoachBookings={selectedCoachBookings}
       />
     );
+    if (confirmationBookingId) page = <ConfirmationPage booking={bookings.find((item) => item.id === confirmationBookingId)} user={adminUser} profile={customerProfile} onConfirm={confirmBooking} loading={loading} status={status} />;
+    if (successBookingId) page = <SuccessPage booking={bookings.find((item) => item.id === successBookingId)} user={adminUser} profile={customerProfile} />;
+    if (currentPath === "/my-bookings") page = <MyBookingsPage bookings={bookings} user={adminUser} profile={customerProfile} />;
+    if (detailBookingId) page = <BookingDetailPage booking={bookings.find((item) => item.id === detailBookingId)} user={adminUser} profile={customerProfile} />;
+    if (currentPath === "/my-profile") page = <ProfilePage user={adminUser} profile={customerProfile} />;
+    return <CustomerAccess key={adminUser?.uid || "signed-out"} user={adminUser} profile={customerProfile} loading={authLoading}>{page}</CustomerAccess>;
   }
 
   return <HomePage />;
 
+  /* eslint-disable no-unreachable */
   return (
     <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-neutral-950 text-white">
       <div className="w-full max-w-6xl mx-auto px-4 py-8 sm:px-5 sm:py-12">
@@ -4010,4 +4567,5 @@ export default function App() {
       </div>
     </div>
   );
+  /* eslint-enable no-unreachable */
 }
