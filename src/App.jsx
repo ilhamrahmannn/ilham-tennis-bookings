@@ -409,12 +409,17 @@ function getPackageOption(packageType) {
 }
 
 function getClientSessions(bookings, packageRecord) {
+  const packageCustomerId = String(packageRecord.customerId || "");
   const packageName = normalizeStudentName(packageRecord.clientName || packageRecord.studentName);
   const packagePhone = cleanTableValue(packageRecord.phone);
 
   return bookings
     .filter((booking) => {
       if (!isValidCoachingBooking(booking)) return false;
+
+      if (packageCustomerId && booking.customerId) {
+        return String(booking.customerId) === packageCustomerId;
+      }
 
       const bookingName = normalizeStudentName(booking.name);
       const bookingPhone = cleanTableValue(booking.phone);
@@ -460,8 +465,8 @@ function getPackageUsage(bookings, packageRecord) {
 }
 
 function matchesClientIdentity(booking, client) {
-  const clientPhone = cleanTableValue(client.phone);
-  const bookingPhone = cleanTableValue(booking.phone);
+  const clientPhone = normalizePhoneNumber(client.phone);
+  const bookingPhone = normalizePhoneNumber(booking.customerPhone || booking.phone);
   const clientName = normalizeStudentName(client.clientName || client.studentName || client.name);
   const bookingName = normalizeStudentName(booking.name);
 
@@ -726,6 +731,28 @@ function getBookingCoachLabel(booking) {
 function cleanTableValue(value) {
   const text = String(value || "").trim();
   return text.toLowerCase() === "#error!" ? "" : text;
+}
+
+function normalizePhoneNumber(value) {
+  const digits = cleanTableValue(value).replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("60")) return digits;
+  if (digits.startsWith("0")) return `60${digits.slice(1)}`;
+  return `60${digits}`;
+}
+
+function findMatchingCustomer(customers, record) {
+  if (record?.customerId) {
+    const linkedCustomer = customers.find((customer) => customer.id === record.customerId || customer.uid === record.customerId);
+    if (linkedCustomer) return linkedCustomer;
+  }
+
+  const phone = normalizePhoneNumber(record?.customerPhone || record?.phone);
+  const name = normalizeStudentName(record?.customerName || record?.clientName || record?.studentName || record?.name);
+  const phoneMatches = phone ? customers.filter((customer) => normalizePhoneNumber(customer.phone) === phone) : [];
+  if (phoneMatches.length === 1) return phoneMatches[0];
+  const nameMatches = name ? customers.filter((customer) => normalizeStudentName(customer.fullName || customer.name) === name) : [];
+  return nameMatches.length === 1 ? nameMatches[0] : null;
 }
 
 function formatNotificationDate(createdAt) {
@@ -997,10 +1024,12 @@ function WeeklySchedule({
   );
 }
 
-function PackageTracker({ packages, bookings, canEdit, user, userProfile }) {
+function PackageTracker({ packages, bookings, customers, canEdit, user, userProfile }) {
   const [editingPackageId, setEditingPackageId] = useState("");
   const [editPackage, setEditPackage] = useState({});
   const [newPackage, setNewPackage] = useState({
+    customerId: "",
+    customerEmail: "",
     clientName: "",
     phone: "",
     packageType: "8 Sessions",
@@ -1031,6 +1060,8 @@ function PackageTracker({ packages, bookings, canEdit, user, userProfile }) {
 
       const key = phone || normalizeStudentName(clientName);
       const current = studentsByKey.get(key) || {
+        customerId: booking.customerId || "",
+        customerEmail: booking.customerEmail || "",
         clientName,
         phone,
         totalSessions: 0,
@@ -1038,6 +1069,8 @@ function PackageTracker({ packages, bookings, canEdit, user, userProfile }) {
 
       current.clientName = current.clientName || clientName;
       current.phone = current.phone || phone;
+      current.customerId = current.customerId || booking.customerId || "";
+      current.customerEmail = current.customerEmail || booking.customerEmail || "";
       if (isBookingOnOrBeforeDate(booking)) {
         current.totalSessions += getBookingDuration(booking);
       }
@@ -1069,11 +1102,13 @@ function PackageTracker({ packages, bookings, canEdit, user, userProfile }) {
 
   function findMatchingPackage(clientName, phone) {
     const normalizedName = normalizeStudentName(clientName);
-    const normalizedPhone = cleanTableValue(phone);
+    const normalizedPhone = normalizePhoneNumber(phone);
+    const selectedCustomerId = newPackage.customerId || "";
 
     return packages.find((packageRecord) => {
+      if (selectedCustomerId && packageRecord.customerId) return packageRecord.customerId === selectedCustomerId;
       const packageName = normalizeStudentName(packageRecord.clientName || packageRecord.studentName);
-      const packagePhone = cleanTableValue(packageRecord.phone);
+      const packagePhone = normalizePhoneNumber(packageRecord.phone);
       if (normalizedPhone && packagePhone) return packagePhone === normalizedPhone;
       return normalizedName && packageName === normalizedName;
     }) || null;
@@ -1091,11 +1126,28 @@ function PackageTracker({ packages, bookings, canEdit, user, userProfile }) {
     };
   }
 
+  function inferPackageCustomerId(packageRecord) {
+    if (packageRecord.customerId) return packageRecord.customerId;
+    const matchedCustomer = findMatchingCustomer(customers, packageRecord);
+    if (matchedCustomer) return matchedCustomer.id || matchedCustomer.uid || "";
+    const linkedIds = new Set(
+      bookings
+        .filter((booking) => booking.customerId && matchesClientIdentity(booking, {
+          name: packageRecord.clientName || packageRecord.studentName,
+          phone: packageRecord.phone,
+        }))
+        .map((booking) => booking.customerId)
+    );
+    return linkedIds.size === 1 ? [...linkedIds][0] : "";
+  }
+
   function selectStudentSuggestion(student) {
     const existingPackage = findMatchingPackage(student.clientName, student.phone);
 
     setNewPackage((current) => ({
       ...current,
+      customerId: student.customerId || current.customerId || "",
+      customerEmail: student.customerEmail || current.customerEmail || "",
       clientName: student.clientName,
       phone: student.phone,
       packageStartSessionNumber: existingPackage?.packageStartSessionNumber || Math.max(1, student.totalSessions + 1),
@@ -1134,6 +1186,7 @@ function PackageTracker({ packages, bookings, canEdit, user, userProfile }) {
   function startEditPackage(packageRecord) {
     setEditingPackageId(packageRecord.id);
     setEditPackage({
+      customerId: inferPackageCustomerId(packageRecord),
       clientName: packageRecord.clientName || packageRecord.studentName || "",
       phone: cleanTableValue(packageRecord.phone),
       packageType: packageRecord.packageType || "8 Sessions",
@@ -1146,6 +1199,15 @@ function PackageTracker({ packages, bookings, canEdit, user, userProfile }) {
     });
   }
 
+  function selectCustomer(customerId, setter) {
+    const customer = customers.find((item) => item.id === customerId || item.uid === customerId);
+    setter((current) => ({
+      ...current,
+      customerId: customerId || "",
+      ...(customer ? { clientName: customer.fullName || customer.name || current.clientName, phone: customer.phone || current.phone } : {}),
+    }));
+  }
+
   async function savePackage(packageRecord) {
     const clientName = String(editPackage.clientName || "").trim();
     const totalPackageSessions = Math.max(0, Number(editPackage.totalPackageSessions || 0));
@@ -1156,7 +1218,10 @@ function PackageTracker({ packages, bookings, canEdit, user, userProfile }) {
       return;
     }
 
+    const linkedCustomer = findMatchingCustomer(customers, { ...editPackage, clientName });
     await updateDoc(doc(db, "packages", packageRecord.id), {
+      customerId: linkedCustomer?.id || linkedCustomer?.uid || editPackage.customerId || packageRecord.customerId || "",
+      customerEmail: linkedCustomer?.email || packageRecord.customerEmail || "",
       clientName,
       studentName: clientName,
       phone: cleanTableValue(editPackage.phone),
@@ -1169,6 +1234,9 @@ function PackageTracker({ packages, bookings, canEdit, user, userProfile }) {
       paymentAmount: Number(editPackage.paymentAmount || 0),
       paymentStatus: editPackage.paymentStatus,
       notes: editPackage.notes || "",
+      updatedBy: user?.uid || "",
+      updatedByName: getCoachName(user, userProfile),
+      updateMessage: "Coach updated your package details.",
       updatedAt: serverTimestamp(),
     });
 
@@ -1191,7 +1259,10 @@ function PackageTracker({ packages, bookings, canEdit, user, userProfile }) {
     try {
       setPackageStatus("Saving package...");
 
+      const linkedCustomer = findMatchingCustomer(customers, { ...newPackage, clientName });
       const packageData = {
+        customerId: linkedCustomer?.id || linkedCustomer?.uid || newPackage.customerId || "",
+        customerEmail: linkedCustomer?.email || newPackage.customerEmail || "",
         clientName,
         studentName: clientName,
         phone: cleanTableValue(newPackage.phone),
@@ -1205,9 +1276,13 @@ function PackageTracker({ packages, bookings, canEdit, user, userProfile }) {
         paymentStatus: newPackage.paymentStatus || "Paid",
         notes: newPackage.notes || "",
         status: "active",
+        coachId: getCoachId(user, userProfile),
         coachName: getCoachName(user, userProfile),
         coachEmail: getCoachEmail(user, userProfile),
         role: getUserRole(userProfile),
+        updatedBy: user?.uid || "",
+        updatedByName: getCoachName(user, userProfile),
+        updateMessage: "Coach assigned or updated your package.",
         updatedAt: serverTimestamp(),
       };
       const existingPackage = findMatchingPackage(clientName, newPackage.phone);
@@ -1225,6 +1300,8 @@ function PackageTracker({ packages, bookings, canEdit, user, userProfile }) {
       }
 
       setNewPackage({
+        customerId: "",
+        customerEmail: "",
         clientName: "",
         phone: "",
         packageType: "8 Sessions",
@@ -1246,6 +1323,9 @@ function PackageTracker({ packages, bookings, canEdit, user, userProfile }) {
     await updateDoc(doc(db, "packages", packageRecord.id), {
       paymentStatus: "Paid",
       paymentDate: packageRecord.paymentDate || formatDate(new Date()),
+      updatedBy: user?.uid || "",
+      updatedByName: getCoachName(user, userProfile),
+      updateMessage: "Coach updated your package payment status.",
       updatedAt: serverTimestamp(),
     });
   }
@@ -1268,6 +1348,11 @@ function PackageTracker({ packages, bookings, canEdit, user, userProfile }) {
 
       {canEdit && (
         <div className="mt-5 grid grid-cols-1 gap-3 rounded-2xl border border-neutral-800 bg-neutral-950 p-4 md:grid-cols-4">
+          <select value={newPackage.customerId} onChange={(e) => selectCustomer(e.target.value, setNewPackage)} className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2 md:col-span-4">
+            <option value="">Auto-link by exact phone or name</option>
+            {newPackage.customerId && !customers.some((customer) => customer.id === newPackage.customerId) && <option value={newPackage.customerId}>Linked customer from booking</option>}
+            {customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.fullName || customer.name || customer.email} · {customer.phone || customer.email}</option>)}
+          </select>
           <div className="relative md:col-span-2" onBlur={hideStudentSuggestionsSoon}>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <input value={newPackage.clientName} onFocus={() => setShowStudentSuggestions(studentSearchQuery.trim().length > 0)} onChange={(e) => updateStudentSearch("clientName", e.target.value)} placeholder="Client name" className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" />
@@ -1319,6 +1404,7 @@ function PackageTracker({ packages, bookings, canEdit, user, userProfile }) {
           <thead className="text-neutral-400">
             <tr>
               <th className="p-3 text-left">Client</th>
+              <th className="p-3 text-left">Customer Account</th>
               <th className="p-3 text-left">Phone</th>
               <th className="p-3 text-left">Attended Sessions</th>
               <th className="p-3 text-left">Package</th>
@@ -1337,10 +1423,12 @@ function PackageTracker({ packages, bookings, canEdit, user, userProfile }) {
               const totalPackageSessions = Number(packageRecord.totalPackageSessions || packageRecord.totalSessions || 0);
               const clientName = packageRecord.clientName || packageRecord.studentName || "";
               const paymentAmount = Number(packageRecord.paymentAmount || 0);
+              const linkedCustomer = findMatchingCustomer(customers, packageRecord);
 
               return (
                 <tr key={packageRecord.id} className="border-t border-neutral-800">
                   <td className="p-3">{isEditing ? <input value={editPackage.clientName} onChange={(e) => setEditPackage((current) => ({ ...current, clientName: e.target.value }))} className="w-full rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" /> : clientName}</td>
+                  <td className="p-3">{isEditing ? <select value={editPackage.customerId || ""} onChange={(e) => selectCustomer(e.target.value, setEditPackage)} className="min-w-52 rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2"><option value="">Auto-link by name/phone</option>{editPackage.customerId && !customers.some((customer) => customer.id === editPackage.customerId) && <option value={editPackage.customerId}>Linked customer from booking</option>}{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.fullName || customer.name || customer.email}</option>)}</select> : packageRecord.customerId ? <span className="text-lime-300">{linkedCustomer?.fullName || "Linked customer"}</span> : <span className="text-amber-300">Not linked</span>}</td>
                   <td className="p-3">{isEditing ? <input value={editPackage.phone} onChange={(e) => setEditPackage((current) => ({ ...current, phone: e.target.value }))} className="w-full rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" /> : cleanTableValue(packageRecord.phone) || "-"}</td>
                   <td className="p-3">{usage.attendedClientSessions}</td>
                   <td className="p-3">{isEditing ? <select value={editPackage.packageType} onChange={(e) => applyPackageType(e.target.value, setEditPackage)} className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2">{Object.keys(packageOptions).map((packageType) => <option key={packageType} value={packageType}>{packageType}</option>)}</select> : packageRecord.packageLabel || getPackageOption(packageRecord.packageType).label}</td>
@@ -2002,7 +2090,7 @@ function PendingLeaveRequests({ requests, bookings, user }) {
   );
 }
 
-function AdminDashboard({ bookings, packages, notifications, coaches, transferLogs, users, leaveRequests, onRefresh, user, userProfile, authLoading }) {
+function AdminDashboard({ bookings, packages, customers, notifications, coaches, transferLogs, users, leaveRequests, onRefresh, user, userProfile, authLoading }) {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginStatus, setLoginStatus] = useState("");
@@ -2296,18 +2384,24 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
     if (!isSuperAdmin || booking.customerId) return;
     try {
       setPhoneEditStatus("Looking for a verified customer account...");
-      const matches = new Map();
-      const email = String(booking.customerEmail || booking.email || "").trim();
-      const phone = cleanTableValue(booking.phone);
-      if (email) (await getDocs(query(collection(db, "customers"), where("email", "==", email)))).docs.forEach((match) => matches.set(match.id, match));
-      if (phone) (await getDocs(query(collection(db, "customers"), where("phone", "==", phone)))).docs.forEach((match) => matches.set(match.id, match));
-      if (matches.size !== 1) {
-        setPhoneEditStatus(matches.size === 0 ? "No exact email or phone match found. The legacy booking was not linked." : "Multiple customer matches found. The legacy booking was not linked.");
+      const bookingName = normalizeStudentName(booking.customerName || booking.name);
+      const bookingPhone = normalizePhoneNumber(booking.customerPhone || booking.phone);
+      const customerSnapshot = await getDocs(collection(db, "customers"));
+      const phoneMatches = bookingPhone
+        ? customerSnapshot.docs.filter((customerDoc) => normalizePhoneNumber(customerDoc.data().phone) === bookingPhone)
+        : [];
+      const nameMatches = bookingName
+        ? customerSnapshot.docs.filter((customerDoc) => normalizeStudentName(customerDoc.data().fullName || customerDoc.data().name) === bookingName)
+        : [];
+      const matches = phoneMatches.length > 0 ? phoneMatches : nameMatches;
+
+      if (matches.length !== 1) {
+        setPhoneEditStatus(matches.length === 0 ? "No exact name or phone match found. The legacy booking was not linked." : "Multiple customer matches found. The legacy booking was not linked.");
         return;
       }
-      const customerDoc = [...matches.values()][0];
+      const customerDoc = matches[0];
       const customer = customerDoc.data();
-      await updateDoc(doc(db, "bookings", booking.id), { customerId: customerDoc.id, customerName: customer.fullName || booking.name || "", customerEmail: customer.email || email, customerPhone: customer.phone || phone, updatedAt: serverTimestamp() });
+      await updateDoc(doc(db, "bookings", booking.id), { customerId: customerDoc.id, customerName: customer.fullName || booking.name || "", customerEmail: customer.email || booking.customerEmail || booking.email || "", customerPhone: customer.phone || booking.customerPhone || booking.phone || "", updatedAt: serverTimestamp() });
       setPhoneEditStatus("Legacy booking linked to the verified customer account.");
     } catch (error) {
       console.error(error);
@@ -2862,7 +2956,7 @@ function AdminDashboard({ bookings, packages, notifications, coaches, transferLo
           </div>
         )}
 
-        <PackageTracker packages={visiblePackages} bookings={visibleBookings} canEdit={canEdit} user={user} userProfile={userProfile} />
+        <PackageTracker packages={visiblePackages} bookings={visibleBookings} customers={customers} canEdit={canEdit} user={user} userProfile={userProfile} />
         <StudentHistory bookings={visibleBookings} packages={visiblePackages} />
         {isSuperAdmin && <TransferLogs logs={transferLogs} />}
 
@@ -3243,7 +3337,18 @@ function SuccessPage({ booking, user, profile }) {
   </CustomerShell>;
 }
 
-function MyBookingsPage({ bookings, user, profile }) {
+function CustomerPackageSummary({ packages, bookings }) {
+  if (packages.length === 0) return <section className="mb-8 rounded-2xl border border-neutral-800 bg-neutral-950 p-5"><h2 className="text-xl font-semibold">My Package</h2><p className="mt-2 text-sm text-neutral-400">No package has been linked to your customer account yet. Your normal bookings remain available below.</p></section>;
+
+  return <section className="mb-8"><h2 className="mb-3 text-xl font-semibold">My Package</h2><div className="grid gap-4 sm:grid-cols-2">{packages.map((packageRecord) => {
+    const usage = getPackageUsage(bookings, packageRecord);
+    const total = Number(packageRecord.totalPackageSessions || packageRecord.totalSessions || 0);
+    const updatedAt = packageRecord.updatedAt?.toDate?.();
+    return <article key={packageRecord.id} className="rounded-2xl border border-lime-400/30 bg-lime-400/5 p-5"><div className="flex items-start justify-between gap-3"><div><p className="text-sm capitalize text-lime-300">{packageRecord.status || "active"}</p><h3 className="mt-1 text-lg font-semibold">{packageRecord.packageLabel || packageRecord.packageType || "Coaching Package"}</h3></div><span className="rounded-full bg-lime-400 px-3 py-1 text-sm font-semibold text-black">{usage.remainingSessions} left</span></div><div className="mt-4 h-2 overflow-hidden rounded-full bg-neutral-800"><div className="h-full bg-lime-400" style={{ width: `${total > 0 ? Math.min(100, (usage.usedSessions / total) * 100) : 0}%` }} /></div><p className="mt-2 text-sm text-neutral-300">Used {usage.usedSessions} of {total} sessions</p><p className="mt-1 text-sm text-neutral-400">Payment: {packageRecord.paymentStatus || "Unpaid"}{packageRecord.paymentAmount ? ` · RM${packageRecord.paymentAmount}` : ""}</p>{packageRecord.notes && <p className="mt-3 rounded-xl bg-neutral-950 p-3 text-sm text-neutral-300">Coach note: {packageRecord.notes}</p>}<p className="mt-3 text-xs text-lime-300">{packageRecord.updateMessage || "Your coach updated this package."}</p><p className="mt-1 text-xs text-neutral-500">Updated by {packageRecord.updatedByName || packageRecord.coachName || "Coach"}{updatedAt ? ` · ${updatedAt.toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" })}` : ""}</p></article>;
+  })}</div></section>;
+}
+
+function MyBookingsPage({ bookings, packages, user, profile }) {
   const own = bookings.filter((booking) => booking.customerId === user?.uid && !booking.isSlotLock);
   const groups = [
     ["Pending Confirmation", own.filter((b) => b.status === "pending_confirmation")],
@@ -3251,7 +3356,7 @@ function MyBookingsPage({ bookings, user, profile }) {
     ["Past Bookings", own.filter((b) => ["confirmed", "completed"].includes(b.status) && b.date < formatDate(new Date()))],
     ["Cancelled Bookings", own.filter((b) => ["cancelled", "expired"].includes(b.status))],
   ];
-  return <CustomerShell user={user} profile={profile} title="My Bookings">{groups.map(([title, items]) => <section key={title} className="mb-8"><h2 className="mb-3 text-xl font-semibold">{title}</h2><div className="grid gap-4 sm:grid-cols-2">{items.map((booking) => <article key={booking.id} className="rounded-2xl border border-neutral-800 bg-neutral-950 p-5"><p className="text-sm text-lime-300">{booking.bookingReference || "Awaiting confirmation"}</p><h3 className="mt-1 font-semibold">{booking.coachName}</h3><p className="mt-2 text-sm text-neutral-400">{booking.date} · {booking.time} · {booking.duration} hour(s)</p><p className="text-sm text-neutral-400">{booking.location}</p><div className="mt-4 flex flex-wrap gap-2 text-sm"><a href={`/my-bookings/${booking.id}`} className="rounded-xl border border-neutral-700 px-3 py-2">View Details</a>{booking.status === "confirmed" && <button type="button" onClick={() => downloadBookingPdf(booking)} className="rounded-xl border border-neutral-700 px-3 py-2">Download PDF</button>}{booking.status === "pending_confirmation" && <a href={`/booking/confirm/${booking.id}`} className="rounded-xl bg-lime-400 px-3 py-2 font-semibold text-black">Continue Confirmation</a>}{["expired", "cancelled"].includes(booking.status) && <a href="/booking" className="rounded-xl border border-neutral-700 px-3 py-2">Book Again</a>}</div></article>)}{items.length === 0 && <p className="text-sm text-neutral-500">No bookings in this section.</p>}</div></section>)}</CustomerShell>;
+  return <CustomerShell user={user} profile={profile} title="My Bookings"><CustomerPackageSummary packages={packages} bookings={own} />{groups.map(([title, items]) => <section key={title} className="mb-8"><h2 className="mb-3 text-xl font-semibold">{title}</h2><div className="grid gap-4 sm:grid-cols-2">{items.map((booking) => <article key={booking.id} className="rounded-2xl border border-neutral-800 bg-neutral-950 p-5"><p className="text-sm text-lime-300">{booking.bookingReference || "Awaiting confirmation"}</p><h3 className="mt-1 font-semibold">{booking.coachName}</h3><p className="mt-2 text-sm text-neutral-400">{booking.date} · {booking.time} · {booking.duration} hour(s)</p><p className="text-sm text-neutral-400">{booking.location}</p><div className="mt-4 flex flex-wrap gap-2 text-sm"><a href={`/my-bookings/${booking.id}`} className="rounded-xl border border-neutral-700 px-3 py-2">View Details</a>{booking.status === "confirmed" && <button type="button" onClick={() => downloadBookingPdf(booking)} className="rounded-xl border border-neutral-700 px-3 py-2">Download PDF</button>}{booking.status === "pending_confirmation" && <a href={`/booking/confirm/${booking.id}`} className="rounded-xl bg-lime-400 px-3 py-2 font-semibold text-black">Continue Confirmation</a>}{["expired", "cancelled"].includes(booking.status) && <a href="/booking" className="rounded-xl border border-neutral-700 px-3 py-2">Book Again</a>}</div></article>)}{items.length === 0 && <p className="text-sm text-neutral-500">No bookings in this section.</p>}</div></section>)}</CustomerShell>;
 }
 
 function BookingDetailPage({ booking, user, profile }) {
@@ -3535,6 +3640,7 @@ export default function App() {
   const [transferLogs, setTransferLogs] = useState([]);
   const [leaveRequests, setLeaveRequests] = useState([]);
   const [users, setUsers] = useState([]);
+  const [customers, setCustomers] = useState([]);
   const [adminUser, setAdminUser] = useState(null);
   const [adminProfile, setAdminProfile] = useState(null);
   const [customerProfile, setCustomerProfile] = useState(null);
@@ -3916,8 +4022,14 @@ export default function App() {
   }, [adminProfile, adminUser, isAdminPage, selectedCoachAvailabilityIds, selectedCoachId]);
 
   useEffect(() => {
-    if (!adminUser || !isAdminPage || !adminProfile) return undefined;
-    const packageSource = getUserRole(adminProfile) === roles.SUPER_ADMIN ? collection(db, "packages") : query(collection(db, "packages"), where("coachId", "==", getCoachId(adminUser, adminProfile)));
+    if (!adminUser) return undefined;
+    let packageSource;
+    if (isAdminPage) {
+      if (!adminProfile) return undefined;
+      packageSource = getUserRole(adminProfile) === roles.SUPER_ADMIN ? collection(db, "packages") : query(collection(db, "packages"), where("coachId", "==", getCoachId(adminUser, adminProfile)));
+    } else {
+      packageSource = query(collection(db, "packages"), where("customerId", "==", adminUser.uid));
+    }
     const unsubscribe = onSnapshot(
       packageSource,
       (snapshot) => {
@@ -3934,7 +4046,7 @@ export default function App() {
       },
       (error) => {
         console.error(error);
-        setStatus("Could not load Firebase packages. Please check Firestore rules.");
+        if (isAdminPage) setStatus("Could not load Firebase packages. Please check Firestore rules.");
       }
     );
 
@@ -3965,6 +4077,15 @@ export default function App() {
     );
 
     return unsubscribe;
+  }, [adminProfile, adminUser, isAdminPage]);
+
+  useEffect(() => {
+    if (!adminUser || !isAdminPage || getUserRole(adminProfile) !== roles.SUPER_ADMIN) return undefined;
+    return onSnapshot(collection(db, "customers"), (snapshot) => {
+      const nextCustomers = snapshot.docs.map((customerDoc) => ({ id: customerDoc.id, ...customerDoc.data() }));
+      nextCustomers.sort((a, b) => String(a.fullName || a.email || "").localeCompare(String(b.fullName || b.email || "")));
+      setCustomers(nextCustomers);
+    }, (error) => console.error("Could not load customers for package linking", error));
   }, [adminProfile, adminUser, isAdminPage]);
 
   useEffect(() => {
@@ -4282,6 +4403,7 @@ export default function App() {
       <AdminDashboard
         bookings={bookings}
         packages={packages}
+        customers={customers}
         notifications={notifications}
         coaches={coaches}
         transferLogs={transferLogs}
@@ -4334,7 +4456,7 @@ export default function App() {
     );
     if (confirmationBookingId) page = <ConfirmationPage booking={bookings.find((item) => item.id === confirmationBookingId)} user={adminUser} profile={customerProfile} onConfirm={confirmBooking} loading={loading} status={status} />;
     if (successBookingId) page = <SuccessPage booking={bookings.find((item) => item.id === successBookingId)} user={adminUser} profile={customerProfile} />;
-    if (currentPath === "/my-bookings") page = <MyBookingsPage bookings={bookings} user={adminUser} profile={customerProfile} />;
+    if (currentPath === "/my-bookings") page = <MyBookingsPage bookings={bookings} packages={packages} user={adminUser} profile={customerProfile} />;
     if (detailBookingId) page = <BookingDetailPage booking={bookings.find((item) => item.id === detailBookingId)} user={adminUser} profile={customerProfile} />;
     if (currentPath === "/my-profile") page = <ProfilePage user={adminUser} profile={customerProfile} />;
     return <CustomerAccess key={adminUser?.uid || "signed-out"} user={adminUser} profile={customerProfile} loading={authLoading}>{page}</CustomerAccess>;
