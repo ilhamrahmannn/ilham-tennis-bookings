@@ -38,7 +38,15 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
       "Open the admin dashboard to review the request.",
     ].join("\n");
 
-    const recipients = (env.ADMIN_EMAIL || "ilhamrahmannn@gmail.com").split(",").map((email) => email.trim()).filter(Boolean);
+    const adminEmails = (env.ADMIN_EMAIL || "ilhamrahmannn@gmail.com").split(",");
+    const coachEmail = String(value(fields, "coachEmail") || "").trim();
+    const recipients = [...new Map(
+      [...adminEmails, coachEmail]
+        .map((email) => email.trim())
+        .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+        .map((email) => [email.toLowerCase(), email])
+    ).values()];
+    if (!recipients.length) return json({ ok: false, error: "No valid coach or admin email configured" }, 503);
     const emailResponse = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${env.EMAIL_API_KEY}`, "Content-Type": "application/json", "Idempotency-Key": `admin-booking-${bookingId}` },
