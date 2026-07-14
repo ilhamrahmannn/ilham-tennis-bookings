@@ -1,7 +1,7 @@
 import coachImage from "./assets/ilham.jpg";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, signOut } from "firebase/auth";
 import { Timestamp, addDoc, collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, query, runTransaction, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
-import { Bell } from "lucide-react";
+import { Bell, MessageCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { auth, db } from "./firebase";
 import { downloadBookingPdf } from "./bookingPdf";
@@ -337,13 +337,20 @@ function isValidCoachingBooking(booking) {
 }
 
 function isReservedBooking(booking) {
-  const status = String(booking.status || booking.bookingStatus || "").trim().toLowerCase();
+  const status = getNormalizedBookingStatus(booking);
   if (["cancelled", "expired"].includes(status)) return false;
   if (status === "pending_confirmation") {
     const expiry = booking.confirmationExpiresAt?.toDate?.() || new Date(booking.confirmationExpiresAt || 0);
     return expiry.getTime() > Date.now();
   }
   return ["confirmed", "completed", "blocked", "not_available"].includes(status);
+}
+
+function getNormalizedBookingStatus(booking) {
+  return String(booking?.status || booking?.bookingStatus || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
 }
 
 function getEndTime(startTime, duration) {
@@ -435,11 +442,24 @@ function getClientSessions(bookings, packageRecord) {
     });
 }
 
-function isBookingOnOrBeforeDate(booking, referenceDate = new Date()) {
+function getBookingStartDateTime(booking) {
   const bookingDate = parseBookingDate(booking.date);
-  const compareDate = parseBookingDate(referenceDate);
+  if (!bookingDate) return null;
 
-  if (!bookingDate || !compareDate) return false;
+  const timeValue = String(booking.startTime || booking.time || "").trim();
+  if (!timeValue) return bookingDate;
+  const parsedTime = new Date(`2026-01-01 ${timeValue}`);
+  if (Number.isNaN(parsedTime.getTime())) return bookingDate;
+
+  bookingDate.setHours(parsedTime.getHours(), parsedTime.getMinutes(), 0, 0);
+  return bookingDate;
+}
+
+function isBookingOnOrBeforeDate(booking, referenceDate = new Date()) {
+  const bookingDate = getBookingStartDateTime(booking);
+  const compareDate = referenceDate instanceof Date ? referenceDate : new Date(referenceDate);
+
+  if (!bookingDate || Number.isNaN(compareDate.getTime())) return false;
 
   return bookingDate <= compareDate;
 }
@@ -448,10 +468,15 @@ function getPackageUsage(bookings, packageRecord) {
   const sessions = getClientSessions(bookings, packageRecord);
   const totalSessions = Number(packageRecord.totalPackageSessions || packageRecord.totalSessions || 0);
   const startSession = Math.max(1, Number(packageRecord.packageStartSessionNumber || 1));
-  const packageSessions = sessions.slice(startSession - 1);
-  const attendedPackageSessions = packageSessions.filter((booking) => {
-    return isBookingOnOrBeforeDate(booking);
-  });
+  const parsedPaymentDate = parseBookingDate(packageRecord.paymentDate);
+  const paymentDate = parsedPaymentDate && !Number.isNaN(parsedPaymentDate.getTime()) ? parsedPaymentDate : null;
+  const packageSessions = paymentDate
+    ? sessions.filter((booking) => {
+        const bookingDate = getBookingStartDateTime(booking);
+        return bookingDate && bookingDate >= paymentDate;
+      })
+    : sessions.slice(startSession - 1);
+  const attendedPackageSessions = packageSessions.filter((booking) => isBookingOnOrBeforeDate(booking));
   const usedSessions = attendedPackageSessions.reduce((total, booking) => {
     return total + getBookingDuration(booking);
   }, 0);
@@ -1384,7 +1409,7 @@ function PackageTracker({ packages, bookings, customers, canEdit, user, userProf
           <select value={newPackage.packageType} onChange={(e) => applyPackageType(e.target.value, setNewPackage)} className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2">
             {Object.keys(packageOptions).map((packageType) => <option key={packageType} value={packageType}>{packageType}</option>)}
           </select>
-          <input type="number" min="1" step="1" value={newPackage.packageStartSessionNumber} onChange={(e) => setNewPackage((current) => ({ ...current, packageStartSessionNumber: e.target.value }))} placeholder="Package start session" className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" />
+          <input type="number" min="1" step="1" value={newPackage.packageStartSessionNumber} onChange={(e) => setNewPackage((current) => ({ ...current, packageStartSessionNumber: e.target.value }))} placeholder="Fallback start session" title="Used only when no payment date is set" className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" />
           <input type="number" min="0" step="0.5" value={newPackage.totalPackageSessions} onChange={(e) => setNewPackage((current) => ({ ...current, totalPackageSessions: e.target.value }))} placeholder="Total sessions" className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" />
           <input type="date" value={newPackage.paymentDate} onChange={(e) => setNewPackage((current) => ({ ...current, paymentDate: e.target.value }))} className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" />
           <input type="number" min="0" step="1" value={newPackage.paymentAmount} onChange={(e) => setNewPackage((current) => ({ ...current, paymentAmount: e.target.value }))} placeholder="Payment amount" className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" />
@@ -1408,7 +1433,7 @@ function PackageTracker({ packages, bookings, customers, canEdit, user, userProf
               <th className="p-3 text-left">Phone</th>
               <th className="p-3 text-left">Attended Sessions</th>
               <th className="p-3 text-left">Package</th>
-              <th className="p-3 text-left">Package Start</th>
+              <th className="p-3 text-left">Counting From</th>
               <th className="p-3 text-left">Used / Total</th>
               <th className="p-3 text-left">Remaining</th>
               <th className="p-3 text-left">Payment</th>
@@ -1432,7 +1457,7 @@ function PackageTracker({ packages, bookings, customers, canEdit, user, userProf
                   <td className="p-3">{isEditing ? <input value={editPackage.phone} onChange={(e) => setEditPackage((current) => ({ ...current, phone: e.target.value }))} className="w-full rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" /> : cleanTableValue(packageRecord.phone) || "-"}</td>
                   <td className="p-3">{usage.attendedClientSessions}</td>
                   <td className="p-3">{isEditing ? <select value={editPackage.packageType} onChange={(e) => applyPackageType(e.target.value, setEditPackage)} className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2">{Object.keys(packageOptions).map((packageType) => <option key={packageType} value={packageType}>{packageType}</option>)}</select> : packageRecord.packageLabel || getPackageOption(packageRecord.packageType).label}</td>
-                  <td className="p-3">{isEditing ? <input type="number" min="1" step="1" value={editPackage.packageStartSessionNumber} onChange={(e) => setEditPackage((current) => ({ ...current, packageStartSessionNumber: e.target.value }))} className="w-28 rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" /> : `Session ${packageRecord.packageStartSessionNumber || 1}`}</td>
+                  <td className="p-3">{isEditing ? <input type="number" min="1" step="1" value={editPackage.packageStartSessionNumber} onChange={(e) => setEditPackage((current) => ({ ...current, packageStartSessionNumber: e.target.value }))} title="Used only when no payment date is set" className="w-28 rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" /> : packageRecord.paymentDate ? packageRecord.paymentDate : `Session ${packageRecord.packageStartSessionNumber || 1}`}</td>
                   <td className="p-3">{isEditing ? <input type="number" min="0" step="0.5" value={editPackage.totalPackageSessions} onChange={(e) => setEditPackage((current) => ({ ...current, totalPackageSessions: e.target.value }))} className="w-24 rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2" /> : `${usage.usedSessions} / ${totalPackageSessions}`}</td>
                   <td className="p-3 text-lime-300">{usage.remainingSessions}</td>
                   <td className="p-3">
@@ -2401,8 +2426,35 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
       }
       const customerDoc = matches[0];
       const customer = customerDoc.data();
-      await updateDoc(doc(db, "bookings", booking.id), { customerId: customerDoc.id, customerName: customer.fullName || booking.name || "", customerEmail: customer.email || booking.customerEmail || booking.email || "", customerPhone: customer.phone || booking.customerPhone || booking.phone || "", updatedAt: serverTimestamp() });
-      setPhoneEditStatus("Legacy booking linked to the verified customer account.");
+      const customerPhone = normalizePhoneNumber(customer.phone) || bookingPhone;
+      const customerName = normalizeStudentName(customer.fullName || customer.name) || bookingName;
+      const matchingBookings = bookings.filter((candidate) => {
+        if (candidate.customerId && candidate.customerId !== customerDoc.id) return false;
+        if (isUnavailableBooking(candidate)) return false;
+        const candidatePhone = normalizePhoneNumber(candidate.customerPhone || candidate.phone);
+        const candidateName = normalizeStudentName(candidate.customerName || candidate.name);
+        const phoneMatchesCustomer = customerPhone && candidatePhone === customerPhone;
+        const nameMatchesCustomer = customerName && candidateName === customerName;
+        return phoneMatchesCustomer || nameMatchesCustomer;
+      });
+
+      if (!matchingBookings.some((candidate) => candidate.id === booking.id)) matchingBookings.push(booking);
+      for (let offset = 0; offset < matchingBookings.length; offset += 400) {
+        const batch = writeBatch(db);
+        matchingBookings.slice(offset, offset + 400).forEach((candidate) => {
+          const normalizedStatus = getNormalizedBookingStatus(candidate);
+          batch.update(doc(db, "bookings", candidate.id), {
+            customerId: customerDoc.id,
+            customerName: customer.fullName || candidate.name || "",
+            customerEmail: customer.email || candidate.customerEmail || candidate.email || "",
+            customerPhone: customer.phone || candidate.customerPhone || candidate.phone || "",
+            ...(normalizedStatus ? { status: normalizedStatus } : {}),
+            updatedAt: serverTimestamp(),
+          });
+        });
+        await batch.commit();
+      }
+      setPhoneEditStatus(`${matchingBookings.length} booking(s) linked to ${customer.fullName || customer.email}.`);
     } catch (error) {
       console.error(error);
       setPhoneEditStatus("Customer linking failed. No booking data was changed.");
@@ -3065,7 +3117,7 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
                     )}
                   </td>
                   <td className="p-4">{booking.customerEmail || "-"}</td>
-                  <td className="p-4">{booking.customerId ? <span className="text-lime-300">Linked</span> : <button type="button" onClick={() => linkLegacyBooking(booking)} className="text-amber-300" title="Match by verified email or phone before linking">Link to Customer Account</button>}</td>
+                  <td className="p-4">{booking.customerId ? <span className="text-lime-300">Linked</span> : <button type="button" onClick={() => linkLegacyBooking(booking)} className="text-amber-300" title="Links all exact name or phone matches to the verified customer">Link All Customer Bookings</button>}</td>
                   <td className="p-4">{booking.players}</td>
                   <td className="p-4">{booking.duration}</td>
                   <td className="p-4">{booking.location}</td>
@@ -3136,6 +3188,8 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
 }
 
 function HomePage() {
+  const whatsappUrl = `https://wa.me/601137507963?text=${encodeURIComponent("Hi Coach Ilham, I would like to enquire about tennis coaching and book a session.")}`;
+
   return (
     <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-neutral-950 text-white">
       <div className="w-full max-w-6xl mx-auto px-4 py-8 sm:px-5 sm:py-12">
@@ -3189,6 +3243,16 @@ function HomePage() {
           ))}
         </section>
       </div>
+      <a
+        href={whatsappUrl}
+        target="_blank"
+        rel="noreferrer"
+        aria-label="Contact Coach Ilham on WhatsApp"
+        className="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-full bg-[#25D366] px-4 py-3 font-semibold text-white shadow-2xl transition hover:scale-105 hover:bg-[#20bd5a] focus:outline-none focus:ring-2 focus:ring-white sm:bottom-7 sm:right-7"
+      >
+        <MessageCircle size={24} fill="currentColor" strokeWidth={1.8} />
+        <span>Contact Us</span>
+      </a>
     </div>
   );
 }
@@ -3349,14 +3413,45 @@ function CustomerPackageSummary({ packages, bookings }) {
 }
 
 function MyBookingsPage({ bookings, packages, user, profile }) {
-  const own = bookings.filter((booking) => booking.customerId === user?.uid && !booking.isSlotLock);
+  const own = bookings
+    .filter((booking) => booking.customerId === user?.uid && !booking.isSlotLock)
+    .map((booking) => ({ ...booking, status: getNormalizedBookingStatus(booking) }));
   const groups = [
     ["Pending Confirmation", own.filter((b) => b.status === "pending_confirmation")],
     ["Upcoming Bookings", own.filter((b) => ["confirmed"].includes(b.status) && b.date >= formatDate(new Date()))],
     ["Past Bookings", own.filter((b) => ["confirmed", "completed"].includes(b.status) && b.date < formatDate(new Date()))],
     ["Cancelled Bookings", own.filter((b) => ["cancelled", "expired"].includes(b.status))],
   ];
-  return <CustomerShell user={user} profile={profile} title="My Bookings"><CustomerPackageSummary packages={packages} bookings={own} />{groups.map(([title, items]) => <section key={title} className="mb-8"><h2 className="mb-3 text-xl font-semibold">{title}</h2><div className="grid gap-4 sm:grid-cols-2">{items.map((booking) => <article key={booking.id} className="rounded-2xl border border-neutral-800 bg-neutral-950 p-5"><p className="text-sm text-lime-300">{booking.bookingReference || "Awaiting confirmation"}</p><h3 className="mt-1 font-semibold">{booking.coachName}</h3><p className="mt-2 text-sm text-neutral-400">{booking.date} · {booking.time} · {booking.duration} hour(s)</p><p className="text-sm text-neutral-400">{booking.location}</p><div className="mt-4 flex flex-wrap gap-2 text-sm"><a href={`/my-bookings/${booking.id}`} className="rounded-xl border border-neutral-700 px-3 py-2">View Details</a>{booking.status === "confirmed" && <button type="button" onClick={() => downloadBookingPdf(booking)} className="rounded-xl border border-neutral-700 px-3 py-2">Download PDF</button>}{booking.status === "pending_confirmation" && <a href={`/booking/confirm/${booking.id}`} className="rounded-xl bg-lime-400 px-3 py-2 font-semibold text-black">Continue Confirmation</a>}{["expired", "cancelled"].includes(booking.status) && <a href="/booking" className="rounded-xl border border-neutral-700 px-3 py-2">Book Again</a>}</div></article>)}{items.length === 0 && <p className="text-sm text-neutral-500">No bookings in this section.</p>}</div></section>)}</CustomerShell>;
+  return <CustomerShell user={user} profile={profile} title="My Bookings">
+    <CustomerPackageSummary packages={packages} bookings={own} />
+    {groups.map(([title, items]) => (
+      <section key={title} className="mb-8">
+        <h2 className="mb-3 text-xl font-semibold">{title}</h2>
+        <div className="space-y-3">
+          {items.map((booking) => (
+            <article key={booking.id} className="flex flex-col gap-4 rounded-2xl border border-neutral-800 bg-neutral-950 p-5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-semibold text-lime-300">{booking.bookingReference || (booking.status === "confirmed" ? "Confirmed booking" : "Awaiting confirmation")}</p>
+                  <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs capitalize text-neutral-400">{booking.status.replaceAll("_", " ")}</span>
+                </div>
+                <h3 className="mt-1 font-semibold">{booking.coachName}</h3>
+                <p className="mt-1 text-sm text-neutral-300">{booking.date} · {booking.time} · {booking.duration} hour(s)</p>
+                <p className="text-sm text-neutral-500">{booking.location}</p>
+              </div>
+              <div className="flex shrink-0 flex-wrap gap-2 text-sm sm:justify-end">
+                <a href={`/my-bookings/${booking.id}`} className="rounded-xl border border-neutral-700 px-3 py-2">View Details</a>
+                {booking.status === "confirmed" && <button type="button" onClick={() => downloadBookingPdf(booking)} className="rounded-xl border border-neutral-700 px-3 py-2">Download PDF</button>}
+                {booking.status === "pending_confirmation" && <a href={`/booking/confirm/${booking.id}`} className="rounded-xl bg-lime-400 px-3 py-2 font-semibold text-black">Continue Confirmation</a>}
+                {["expired", "cancelled"].includes(booking.status) && <a href="/booking" className="rounded-xl border border-neutral-700 px-3 py-2">Book Again</a>}
+              </div>
+            </article>
+          ))}
+          {items.length === 0 && <p className="text-sm text-neutral-500">No bookings in this section.</p>}
+        </div>
+      </section>
+    ))}
+  </CustomerShell>;
 }
 
 function BookingDetailPage({ booking, user, profile }) {
