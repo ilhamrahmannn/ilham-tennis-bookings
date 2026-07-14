@@ -766,6 +766,29 @@ function normalizePhoneNumber(value) {
   return `60${digits}`;
 }
 
+function getBookingWhatsAppMessage(booking) {
+  return [
+    "A customer submitted a new tennis coaching booking request.",
+    "",
+    `Customer: ${booking.customerName || booking.name || "-"}`,
+    `Phone: ${booking.customerPhone || booking.phone || "-"}`,
+    `Email: ${booking.customerEmail || "-"}`,
+    `Coach: ${booking.coachName || "-"}`,
+    `Date: ${booking.date || "-"}`,
+    `Time: ${booking.startTime || booking.time || "-"}`,
+    `Duration: ${booking.durationHours || booking.duration || "-"} hour(s)`,
+    `Location: ${booking.location || "-"}`,
+    `Court: ${booking.courtOption || booking.court || "-"}`,
+    "",
+    "Please open the coach dashboard to review the request.",
+  ].join("\n");
+}
+
+function getWhatsAppBookingUrl(phone, booking) {
+  const normalizedPhone = normalizePhoneNumber(phone);
+  return normalizedPhone ? `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(getBookingWhatsAppMessage(booking))}` : "";
+}
+
 function findMatchingCustomer(customers, record) {
   if (record?.customerId) {
     const linkedCustomer = customers.find((customer) => customer.id === record.customerId || customer.uid === record.customerId);
@@ -3368,6 +3391,17 @@ function BookingDetails({ booking }) {
   return <dl className="divide-y divide-neutral-800">{rows.map(([label, value]) => <div key={label} className="grid gap-1 py-3 sm:grid-cols-2"><dt className="text-neutral-400">{label}</dt><dd className="font-medium capitalize">{value || "-"}</dd></div>)}</dl>;
 }
 
+function SelectedCoachWhatsAppLink({ booking }) {
+  const coachUrl = getWhatsAppBookingUrl(booking.coachPhone, booking);
+
+  if (!coachUrl) return <p className="mt-4 text-sm text-amber-300">The selected coach does not have a WhatsApp number saved yet.</p>;
+
+  return <div className="mt-5">
+    <p className="mb-3 text-sm text-neutral-400">Open WhatsApp with the booking details ready, then press Send.</p>
+    <a href={coachUrl} target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 py-3 font-semibold text-black"><MessageCircle size={18} /> WhatsApp {booking.coachName || "Selected Coach"}</a>
+  </div>;
+}
+
 function ConfirmationPage({ booking, user, profile, onConfirm, loading, status }) {
   if (!booking || booking.customerId !== user?.uid) return <CustomerShell user={user} profile={profile}><p>Booking not found or you do not have access.</p></CustomerShell>;
   const expiry = booking.confirmationExpiresAt?.toDate?.();
@@ -3378,6 +3412,7 @@ function ConfirmationPage({ booking, user, profile, onConfirm, loading, status }
       <button type="button" onClick={() => onConfirm(booking)} disabled={loading} className="rounded-2xl bg-lime-400 py-4 font-semibold text-black disabled:opacity-50">{loading ? "Confirming..." : "Confirm Booking"}</button>
       <a href={`/booking?edit=${booking.id}`} className="rounded-2xl border border-neutral-700 py-4 text-center font-semibold">Edit Booking</a>
     </div>
+    <SelectedCoachWhatsAppLink booking={booking} />
     {status && <p className="mt-4 text-sm text-neutral-300">{status}</p>}
   </CustomerShell>;
 }
@@ -3397,7 +3432,7 @@ function SuccessPage({ booking, user, profile }) {
       <a href="/my-bookings" className="rounded-2xl border border-neutral-700 py-3 text-center font-semibold">View My Bookings</a>
       <a href="/booking" className="rounded-2xl border border-neutral-700 py-3 text-center font-semibold">Book Another Session</a>
     </div>
-    <a className="mt-4 block text-center text-sm text-lime-300" target="_blank" href={`https://wa.me/601137507963?text=${encodeURIComponent(`Hi Coach, regarding booking ${booking.bookingReference}`)}`}>Contact Coach on WhatsApp</a>
+    <SelectedCoachWhatsAppLink booking={booking} />
   </CustomerShell>;
 }
 
@@ -3814,6 +3849,7 @@ export default function App() {
           coachId: coach.coachId,
           coachName: coach.coachName || coach.name || coach.email || coach.coachId || "Coach",
           coachEmail: coach.coachEmail || coach.email || "",
+          coachPhone: coach.coachPhone || coach.phone || coach.whatsapp || "",
         });
       }
     });
@@ -4346,6 +4382,7 @@ export default function App() {
       coachId: selectedCoach.coachId,
       coachName: selectedCoach.coachName,
       coachEmail: selectedCoach.coachEmail,
+      coachPhone: selectedCoach.coachPhone,
       role: "customer",
       updatedAt: serverTimestamp(),
     };
