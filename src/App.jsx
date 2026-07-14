@@ -4149,9 +4149,12 @@ export default function App() {
   }, [adminProfile, adminUser, isAdminPage]);
 
   useEffect(() => {
-    if (!adminUser || !isAdminPage || getUserRole(adminProfile) !== roles.SUPER_ADMIN) return undefined;
+    if (!adminUser || !isAdminPage || ![roles.SUPER_ADMIN, roles.COACH].includes(getUserRole(adminProfile))) return undefined;
+    const notificationSource = getUserRole(adminProfile) === roles.SUPER_ADMIN
+      ? collection(db, "notifications")
+      : query(collection(db, "notifications"), where("coachId", "==", getCoachId(adminUser, adminProfile)));
     const unsubscribe = onSnapshot(
-      collection(db, "notifications"),
+      notificationSource,
       (snapshot) => {
         const nextNotifications = snapshot.docs.map((notificationDoc) => ({
           id: notificationDoc.id,
@@ -4305,6 +4308,7 @@ export default function App() {
     const expiresAt = Timestamp.fromMillis(Date.now() + 10 * 60 * 1000);
     const bookingId = editBookingId || draftBookingId;
     const bookingRef = doc(db, "bookings", bookingId);
+    const notificationRef = doc(db, "notifications", bookingId);
     const requestedSlots = getRequestedSlotKeys(date, selectedBookingTime, durationHours);
     const bookingData = {
       customerId: adminUser.uid,
@@ -4330,6 +4334,7 @@ export default function App() {
       confirmationExpiresAt: expiresAt,
       confirmationEmailSent: false,
       confirmationEmailStatus: "pending",
+      adminNotificationEmailStatus: "pending",
       pdfGenerated: false,
       note,
       notes: note,
@@ -4384,7 +4389,40 @@ export default function App() {
           confirmationExpiresAt: expiresAt,
           updatedAt: serverTimestamp(),
         }));
+        transaction.set(notificationRef, {
+          bookingId,
+          customerId: adminUser.uid,
+          coachId: selectedCoach.coachId,
+          title: existing ? "Booking request updated" : "New booking request",
+          message: `${customerProfile.fullName} requested ${date} at ${selectedBookingTime}.`,
+          name: customerProfile.fullName,
+          phone: customerProfile.phone,
+          email: adminUser.email || customerProfile.email || "",
+          date,
+          time: selectedBookingTime,
+          duration: durationHours,
+          location,
+          courtOption: location === "Tennis Nusa Duta" ? courtOption : "",
+          isRead: false,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
       });
+
+      try {
+        const token = await adminUser.getIdToken();
+        const response = await fetch("/api/send-admin-booking-notification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ bookingId }),
+        });
+        const responseData = await response.json();
+        if (!response.ok || !responseData.ok) throw new Error(responseData.error || "Admin notification email could not be sent");
+        await updateDoc(bookingRef, { adminNotificationEmailStatus: "sent", adminNotificationEmailSentAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      } catch (emailError) {
+        console.error(emailError);
+        await updateDoc(bookingRef, { adminNotificationEmailStatus: "failed", updatedAt: serverTimestamp() }).catch(console.error);
+      }
 
       window.location.assign(`/booking/confirm/${bookingId}`);
     } catch (error) {

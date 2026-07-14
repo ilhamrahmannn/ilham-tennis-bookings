@@ -52,6 +52,23 @@ service cloud.firestore {
       allow delete: if signedIn() && (resource.data.customerId == request.auth.uid || isSuperAdmin() || isCoach());
     }
 
+    match /notifications/{notificationId} {
+      function ownsNotificationBooking() {
+        return signedIn()
+          && request.resource.data.bookingId == notificationId
+          && request.resource.data.customerId == request.auth.uid
+          && getAfter(/databases/$(database)/documents/bookings/$(notificationId)).data.customerId == request.auth.uid;
+      }
+      allow read: if isSuperAdmin() || (isCoach() && resource.data.coachId == request.auth.uid);
+      allow create: if ownsNotificationBooking();
+      allow update: if isSuperAdmin()
+        || (isCoach() && resource.data.coachId == request.auth.uid)
+        || (ownsNotificationBooking()
+          && request.resource.data.bookingId == resource.data.bookingId
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.coachId == resource.data.coachId);
+    }
+
     match /coaches/{coachId} { allow read: if signedIn(); allow write: if isSuperAdmin(); }
     match /packages/{packageId} {
       allow read: if isSuperAdmin()
