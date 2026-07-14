@@ -3405,11 +3405,16 @@ function SelectedCoachWhatsAppLink({ booking }) {
 function ConfirmationPage({ booking, user, profile, onConfirm, loading, status }) {
   if (!booking || booking.customerId !== user?.uid) return <CustomerShell user={user} profile={profile}><p>Booking not found or you do not have access.</p></CustomerShell>;
   const expiry = booking.confirmationExpiresAt?.toDate?.();
+  function handleConfirmClick() {
+    const whatsappWindow = booking.coachPhone ? window.open("about:blank", "_blank") : null;
+    if (whatsappWindow) whatsappWindow.opener = null;
+    onConfirm(booking, whatsappWindow);
+  }
   return <CustomerShell user={user} profile={profile} title="Review your booking">
     <BookingDetails booking={booking} />
     {expiry && <p className="mt-4 text-sm text-amber-300">This slot is reserved until {expiry.toLocaleTimeString("en-MY", { hour: "numeric", minute: "2-digit" })}.</p>}
     <div className="mt-7 grid gap-3 sm:grid-cols-2">
-      <button type="button" onClick={() => onConfirm(booking)} disabled={loading} className="rounded-2xl bg-lime-400 py-4 font-semibold text-black disabled:opacity-50">{loading ? "Confirming..." : "Confirm Booking"}</button>
+      <button type="button" onClick={handleConfirmClick} disabled={loading} className="rounded-2xl bg-lime-400 py-4 font-semibold text-black disabled:opacity-50">{loading ? "Confirming..." : "Confirm Booking"}</button>
       <a href={`/booking?edit=${booking.id}`} className="rounded-2xl border border-neutral-700 py-4 text-center font-semibold">Edit Booking</a>
     </div>
     <SelectedCoachWhatsAppLink booking={booking} />
@@ -4471,7 +4476,7 @@ export default function App() {
     }
   }
 
-  async function confirmBooking(booking) {
+  async function confirmBooking(booking, whatsappWindow = null) {
     if (!adminUser || !booking || submittingRef.current) return;
     submittingRef.current = true;
     setLoading(true);
@@ -4538,8 +4543,12 @@ export default function App() {
           await updateDoc(doc(db, "bookings", booking.id), { confirmationEmailStatus: "failed", updatedAt: serverTimestamp() });
         }
       }
+      const whatsappUrl = confirmedBooking ? getWhatsAppBookingUrl(confirmedBooking.coachPhone, confirmedBooking) : "";
+      if (whatsappWindow && whatsappUrl) whatsappWindow.location.href = whatsappUrl;
+      else if (whatsappWindow) whatsappWindow.close();
       window.location.assign(`/booking/success/${booking.id}`);
     } catch (error) {
+      if (whatsappWindow && !whatsappWindow.closed) whatsappWindow.close();
       console.error(error);
       setStatus(error instanceof Error ? error.message : "Booking could not be confirmed.");
     } finally {
