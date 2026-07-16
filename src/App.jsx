@@ -1,7 +1,7 @@
 import coachImage from "./assets/ilham.jpg";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, signOut } from "firebase/auth";
 import { Timestamp, addDoc, collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, query, runTransaction, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
-import { Bell, MessageCircle } from "lucide-react";
+import { Bell, ExternalLink, MessageCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { auth, db } from "./firebase";
 import { downloadBookingPdf } from "./bookingPdf";
@@ -58,7 +58,7 @@ const serviceOptions = [
     id: "kids",
     title: "Tennis Lessons for Kids",
     description:
-      "Kids Tennis Lessons Johor Bahru focus on confidence, coordination, footwork, and clean stroke basics in a friendly private coaching environment.",
+      "Kids Tennis Lessons Johor Bahru with a choice of private coaching or group coaching.",
   },
   {
     id: "adult",
@@ -67,16 +67,16 @@ const serviceOptions = [
       "Adult Tennis Coaching Johor Bahru is available for new players, returning players, and adults who want focused Tennis Training Johor Bahru sessions.",
   },
   {
-    id: "beginner",
-    title: "Beginner Tennis Classes",
+    id: "sparring",
+    title: "Sparring Session",
     description:
-      "Tennis Classes Johor Bahru for beginners cover grips, rallying, serving, scoring, and match confidence at a pace that suits each student.",
+      "Book a focused hitting and match-play session to improve rally consistency, movement, tactics, and confidence.",
   },
   {
-    id: "nusa-duta",
-    title: "Nusa Duta Tennis Complex Johor Bahru",
+    id: "group",
+    title: "Group Coaching",
     description:
-      "Book a Private Tennis Coach Johor Bahru session at Nusa Duta Tennis Complex with real-time coach availability and weekly schedule viewing.",
+      "Join a scheduled group coaching session at selected fixed times with structured drills and shared court practice.",
   },
 ];
 
@@ -94,11 +94,30 @@ function getCourtBookingUrl(location, courtOption) {
   return "";
 }
 
+const groupCoachingCapacity = 6;
+const groupCoachingFeePerPlayer = 60;
+
+function getGroupSeatLockId(coachId, date, seatNumber) {
+  return `${String(coachId || "group-coaching").replace(/[^a-zA-Z0-9_-]/g, "_")}__${date}__group-seat-${seatNumber}`;
+}
+
+function isGroupCoachingBooking(booking) {
+  return booking?.coachingFormat === "group" || booking?.serviceType === "group";
+}
+
 function formatDate(date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function getNextTuesdayDate(fromDate = new Date()) {
+  const next = new Date(fromDate);
+  next.setHours(0, 0, 0, 0);
+  const daysUntilTuesday = (2 - next.getDay() + 7) % 7;
+  next.setDate(next.getDate() + daysUntilTuesday);
+  return formatDate(next);
 }
 
 const monthNameMap = {
@@ -789,6 +808,30 @@ function getWhatsAppBookingUrl(phone, booking) {
   return normalizedPhone ? `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(getBookingWhatsAppMessage(booking))}` : "";
 }
 
+function getBundleWhatsAppMessage(bookings) {
+  const sessions = [...bookings].sort((a, b) => Number(a.bundleIndex || 0) - Number(b.bundleIndex || 0));
+  const first = sessions[0] || {};
+  return [
+    "A customer submitted a tennis coaching bundle request.",
+    "",
+    `Customer: ${first.customerName || first.name || "-"}`,
+    `Phone: ${first.customerPhone || first.phone || "-"}`,
+    `Email: ${first.customerEmail || "-"}`,
+    `Coach: ${first.coachName || "-"}`,
+    `Bundle: ${first.bundleReference || first.bundleId || "-"}`,
+    `Sessions: ${sessions.length}`,
+    "",
+    ...sessions.map((session, index) => `${index + 1}. ${session.date} · ${session.startTime || session.time} · ${session.durationHours || session.duration} hour(s) · ${session.location}${session.courtOption || session.court ? ` (${session.courtOption || session.court})` : ""}`),
+    "",
+    "Please open the coach dashboard to review the request.",
+  ].join("\n");
+}
+
+function getBundleWhatsAppUrl(phone, bookings) {
+  const normalizedPhone = normalizePhoneNumber(phone);
+  return normalizedPhone ? `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(getBundleWhatsAppMessage(bookings))}` : "";
+}
+
 function findMatchingCustomer(customers, record) {
   if (record?.customerId) {
     const linkedCustomer = customers.find((customer) => customer.id === record.customerId || customer.uid === record.customerId);
@@ -937,7 +980,15 @@ function WeeklySchedule({
 
   return (
     <div className={`bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8 ${className}`}>
-      <h2 className="text-2xl font-semibold mb-6">Weekly Schedule</h2>
+      <div className="premium-schedule-heading">
+        <h2 className="text-2xl font-semibold">Weekly Schedule</h2>
+        <div className="premium-schedule-legend" aria-label="Weekly schedule colour guide">
+          <div><span className="is-available" aria-hidden="true" /><span><strong>Available</strong><small>Open coaching slot</small></span></div>
+          <div><span className="is-booked" aria-hidden="true" /><span><strong>Reserved</strong><small>Already booked</small></span></div>
+          <div><span className="is-blocked" aria-hidden="true" /><span><strong>Unavailable</strong><small>Not open for booking</small></span></div>
+          <div><span className="is-past" aria-hidden="true" /><span><strong>Past time</strong><small>No longer bookable</small></span></div>
+        </div>
+      </div>
 
      <div className={`overflow-auto max-w-full ${contentClassName}`}>
         <div className="min-w-[900px]">
@@ -2412,14 +2463,16 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
       const bookingRef = doc(db, "bookings", booking.id);
       const slots = getRequestedSlotKeys(booking.date, booking.startTime || booking.time, booking.durationHours || booking.duration);
       await runTransaction(db, async (transaction) => {
-        const lockRefs = slots.map((slot) => doc(db, "availabilityLocks", getSlotLockId(booking.coachId, booking.date, slot)));
+        const lockRefs = isGroupCoachingBooking(booking) && booking.groupSeatNumber
+          ? [doc(db, "availabilityLocks", getGroupSeatLockId(booking.coachId, booking.date, booking.groupSeatNumber))]
+          : slots.map((slot) => doc(db, "availabilityLocks", getSlotLockId(booking.coachId, booking.date, slot)));
         const locks = [];
         for (const lockRef of lockRefs) locks.push(await transaction.get(lockRef));
         if (locks.some((lock) => lock.exists() && lock.data().bookingId !== booking.id && lock.data().status !== "expired")) throw new Error("This slot is no longer available.");
         transaction.update(bookingRef, { status: "confirmed", bookingStatus: "Confirmed", bookingReference: booking.bookingReference || getBookingReference(booking.id, booking.date), confirmedAt: serverTimestamp(), pdfGenerated: true, confirmationEmailStatus: "pending", updatedAt: serverTimestamp() });
-        lockRefs.forEach((lockRef) => {
-          const slot = slots[lockRefs.indexOf(lockRef)];
-          transaction.set(lockRef, { bookingId: booking.id, customerId: booking.customerId || "", coachId: booking.coachId, date: booking.date, time: getAvailabilityLockTime({ date: booking.date, time: slot }), status: "confirmed", confirmationExpiresAt: null, updatedAt: serverTimestamp() });
+        lockRefs.forEach((lockRef, index) => {
+          const slot = isGroupCoachingBooking(booking) ? "8:00 PM" : slots[index];
+          transaction.set(lockRef, { bookingId: booking.id, customerId: booking.customerId || "", customerName: booking.customerName || booking.name || "", coachId: booking.coachId, date: booking.date, time: getAvailabilityLockTime({ date: booking.date, time: slot }), status: "confirmed", confirmationExpiresAt: null, ...(isGroupCoachingBooking(booking) ? { coachingFormat: "group", serviceType: booking.serviceType || "group", groupSeatNumber: booking.groupSeatNumber, groupCapacity: groupCoachingCapacity, ratePerPlayer: groupCoachingFeePerPlayer, duration: 2 } : {}), updatedAt: serverTimestamp() });
         });
       });
       setPhoneEditStatus("Booking confirmed. Use Resend Email to notify the customer.");
@@ -2746,7 +2799,7 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
 
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-neutral-950 text-white flex items-center justify-center px-5">
+      <div className="premium-app-page min-h-screen bg-neutral-950 text-white flex items-center justify-center px-5">
         <p className="text-neutral-300">Checking admin access...</p>
       </div>
     );
@@ -2754,8 +2807,8 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-neutral-950 text-white flex items-center justify-center px-5">
-        <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl p-8">
+      <div className="premium-app-page premium-login-page min-h-screen bg-neutral-950 text-white flex items-center justify-center px-5">
+        <div className="premium-panel w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl p-8">
           <h1 className="text-3xl font-bold">Coach Login</h1>
           <p className="mt-2 text-neutral-400">Sign in with your admin username.</p>
 
@@ -2831,12 +2884,12 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
   }
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-white px-5 py-10">
+    <div className="premium-app-page premium-admin-page min-h-screen bg-neutral-950 text-white px-5 py-10">
       <div className="max-w-6xl mx-auto">
 
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-4xl font-bold">Admin Dashboard</h1>
+            <h1 className="premium-page-title text-4xl font-bold">Admin Dashboard</h1>
             <p className="mt-2 text-neutral-400">
               {getCoachName(user, userProfile)} · {userRole}
             </p>
@@ -3214,9 +3267,9 @@ function HomePage() {
   const whatsappUrl = `https://wa.me/601137507963?text=${encodeURIComponent("Hi Coach Ilham, I would like to enquire about tennis coaching and book a session.")}`;
 
   return (
-    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-neutral-950 text-white">
-      <div className="w-full max-w-6xl mx-auto px-4 py-8 sm:px-5 sm:py-12">
-        <div className="flex justify-end mb-6">
+    <div className="premium-home min-h-screen w-full max-w-full overflow-x-hidden bg-neutral-950 text-white">
+      <div className="premium-home-shell w-full max-w-6xl mx-auto px-4 py-8 sm:px-5 sm:py-12">
+        <div className="premium-topbar flex justify-end mb-6">
           <a
             href="/admin"
             className="rounded-full border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-lime-400 hover:text-lime-300 transition"
@@ -3225,45 +3278,78 @@ function HomePage() {
           </a>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-10 items-center overflow-hidden">
-          <div>
-            <p className="inline-block rounded-full border border-lime-400/40 px-4 py-2 text-sm text-lime-300">
+        <div className="premium-hero grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-10 items-center overflow-hidden">
+          <div className="premium-hero-copy">
+            <p className="premium-kicker inline-block rounded-full border border-lime-400/40 px-4 py-2 text-sm text-lime-300">
               ITF Coaching Level 1 - Sport Science Level 1
             </p>
 
-            <h1 className="mt-6 text-4xl md:text-6xl font-bold">
+            <h1 className="premium-display mt-6 text-4xl md:text-6xl font-bold">
               Private Tennis Coach in Johor Bahru
             </h1>
 
-            <p className="mt-5 text-neutral-300 text-lg">
+            <p className="premium-lead mt-5 text-neutral-300 text-lg">
               Coach Ilham Academy offers Tennis Lessons Johor Bahru for kids and adults, with private tennis coaching built around your level, your pace, and your goals.
             </p>
 
-            <p className="mt-3 text-neutral-400">
+            <p className="premium-location mt-3 text-neutral-400">
               Tennis Coach Johor Bahru based at Nusa Duta Tennis Complex.
             </p>
+
+            <div className="premium-hero-actions">
+              <a href="/booking" className="premium-primary-cta">Book Now <span aria-hidden="true">→</span></a>
+              <a href={whatsappUrl} target="_blank" rel="noreferrer" className="premium-whatsapp-cta"><MessageCircle size={18} /> Chat on WhatsApp</a>
+            </div>
           </div>
 
-          <div className="flex justify-center">
+          <div className="premium-portrait-wrap flex justify-center">
             <img
               src={coachImage}
               alt="Coach Ilham"
-              className="w-full max-w-sm sm:max-w-md rounded-3xl border border-neutral-800 object-cover shadow-2xl"
+              className="premium-portrait w-full max-w-sm sm:max-w-md rounded-3xl border border-neutral-800 object-cover shadow-2xl"
             />
           </div>
         </div>
 
-        <section className="mt-10 grid gap-4 md:grid-cols-2">
-          {serviceOptions.map((service) => (
+        <section className="premium-friendly-guide">
+          <article className="premium-coach-preview">
+            <div className="premium-guide-label">Choose your coach</div>
+            <div className="premium-coach-preview-card">
+              <img src={coachImage} alt="" />
+              <div><strong>Coach Ilham</strong><span>ITF Level 1 · Sport Science Level 1</span><small>Experienced · Supportive · Results-driven</small></div>
+              <span aria-hidden="true">⌄</span>
+            </div>
+          </article>
+          <article className="premium-how-it-works">
+            <div className="premium-guide-label">How to book your coaching session</div>
+            <div className="premium-step-list">
+              <div><span>1</span><strong>Select your coach</strong><small>Choose the coach you would like to train with.</small></div>
+              <div><span>2</span><strong>Pick a coaching time</strong><small>Select an available slot or add several sessions to a bundle.</small></div>
+              <div><span>3</span><strong>Check court availability</strong><small>Open the court website and secure a court that matches your coaching slot.</small></div>
+              <div><span>4</span><strong>Confirm &amp; book</strong><small>Once the court is confirmed, review and submit your coaching booking.</small></div>
+            </div>
+          </article>
+        </section>
+
+        <section className="premium-services mt-10 grid gap-4 md:grid-cols-2">
+          {serviceOptions.map((service, index) => (
             <a
               key={service.id}
               href={`/booking?service=${service.id}`}
-              className="rounded-3xl border border-neutral-800 bg-neutral-900 p-5 transition hover:border-lime-400/70 hover:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-lime-400"
+              className="premium-service-card rounded-3xl border border-neutral-800 bg-neutral-900 p-5 transition hover:border-lime-400/70 hover:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-lime-400"
             >
+              <span className="premium-service-index">0{index + 1}</span>
               <h2 className="text-xl font-semibold">{service.title}</h2>
               <p className="mt-2 text-sm leading-6 text-neutral-400">{service.description}</p>
             </a>
           ))}
+        </section>
+
+        <section className="premium-trust-strip">
+          <div><strong>All ages & levels</strong><span>Kids, adults and beginners</span></div>
+          <div><strong>Personalised sessions</strong><span>Training tailored to your goals</span></div>
+          <div><strong>Real-time availability</strong><span>See open coaching slots instantly</span></div>
+          <div><strong>Flexible bundles</strong><span>Reserve multiple future sessions</span></div>
         </section>
       </div>
       <a
@@ -3282,7 +3368,7 @@ function HomePage() {
 
 function CustomerHeader({ user, profile }) {
   return (
-    <header className="mb-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+    <header className="premium-customer-header mb-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
       <a href="/" className="font-bold text-lime-300">Ilham Tennis Academy</a>
       <nav className="flex flex-wrap items-center gap-3 text-sm">
         <a href="/booking" className="hover:text-lime-300">Book a Session</a>
@@ -3344,10 +3430,10 @@ function CustomerAccess({ user, profile, loading, children }) {
     }
   }
 
-  if (loading) return <div className="min-h-screen bg-neutral-950 p-10 text-center text-white">Checking your account...</div>;
+  if (loading) return <div className="premium-app-page min-h-screen bg-neutral-950 p-10 text-center text-white">Checking your account...</div>;
   if (!user || !isGoogleAccount) return (
-    <div className="min-h-screen bg-neutral-950 px-4 py-16 text-white">
-      <div className="mx-auto max-w-lg rounded-3xl border border-neutral-800 bg-neutral-900 p-8 text-center">
+    <div className="premium-app-page premium-login-page min-h-screen bg-neutral-950 px-4 py-16 text-white">
+      <div className="premium-panel mx-auto max-w-lg rounded-3xl border border-neutral-800 bg-neutral-900 p-8 text-center">
         <h1 className="text-3xl font-bold">Sign in to book</h1>
         <p className="mt-3 text-neutral-400">Google sign-in is required before you can select or reserve a coaching slot.</p>
         {user && !isGoogleAccount && <p className="mt-4 rounded-2xl border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-200">A coach/admin session is currently active. Continue with Google to switch to a customer account.</p>}
@@ -3357,8 +3443,8 @@ function CustomerAccess({ user, profile, loading, children }) {
     </div>
   );
   if (!profile?.profileCompleted) return (
-    <div className="min-h-screen bg-neutral-950 px-4 py-12 text-white">
-      <div className="mx-auto max-w-lg rounded-3xl border border-neutral-800 bg-neutral-900 p-8">
+    <div className="premium-app-page premium-login-page min-h-screen bg-neutral-950 px-4 py-12 text-white">
+      <div className="premium-panel mx-auto max-w-lg rounded-3xl border border-neutral-800 bg-neutral-900 p-8">
         <h1 className="text-3xl font-bold">Complete your profile</h1>
         <p className="mt-2 text-neutral-400">You only need to do this once.</p>
         <label className="mt-6 block text-sm">Full Name</label>
@@ -3376,7 +3462,15 @@ function CustomerAccess({ user, profile, loading, children }) {
 }
 
 function BookingDetails({ booking }) {
-  const rows = [
+  const rows = isGroupCoachingBooking(booking) ? [
+    ["Player", booking.customerName || booking.name],
+    ["Session", "Group Coaching"],
+    ["Date", booking.date],
+    ["Time", "8:00 PM - 10:00 PM"],
+    ["Rate", `RM${booking.ratePerPlayer || groupCoachingFeePerPlayer} per player`],
+    ["Group Capacity", `${booking.groupCapacity || groupCoachingCapacity} players maximum`],
+    ["Booking Status", String(booking.status || booking.bookingStatus || "").replaceAll("_", " ")],
+  ] : [
     ["Customer", booking.customerName || booking.name],
     ["Coach", booking.coachName],
     ["Date", booking.date],
@@ -3391,8 +3485,9 @@ function BookingDetails({ booking }) {
   return <dl className="divide-y divide-neutral-800">{rows.map(([label, value]) => <div key={label} className="grid gap-1 py-3 sm:grid-cols-2"><dt className="text-neutral-400">{label}</dt><dd className="font-medium capitalize">{value || "-"}</dd></div>)}</dl>;
 }
 
-function SelectedCoachWhatsAppLink({ booking }) {
-  const coachUrl = getWhatsAppBookingUrl(booking.coachPhone, booking);
+function SelectedCoachWhatsAppLink({ booking, bookings = [] }) {
+  const group = bookings.length > 1 ? bookings : [booking];
+  const coachUrl = group.length > 1 ? getBundleWhatsAppUrl(booking.coachPhone, group) : getWhatsAppBookingUrl(booking.coachPhone, booking);
 
   if (!coachUrl) return <p className="mt-4 text-sm text-amber-300">The selected coach does not have a WhatsApp number saved yet.</p>;
 
@@ -3402,42 +3497,50 @@ function SelectedCoachWhatsAppLink({ booking }) {
   </div>;
 }
 
-function ConfirmationPage({ booking, user, profile, onConfirm, loading, status }) {
+function ConfirmationPage({ booking, bundleBookings = [], user, profile, onConfirm, onConfirmBundle, loading, status }) {
   if (!booking || booking.customerId !== user?.uid) return <CustomerShell user={user} profile={profile}><p>Booking not found or you do not have access.</p></CustomerShell>;
-  const expiry = booking.confirmationExpiresAt?.toDate?.();
+  const group = bundleBookings.length > 1 ? [...bundleBookings].sort((a, b) => Number(a.bundleIndex || 0) - Number(b.bundleIndex || 0)) : [booking];
+  const isBundle = group.length > 1;
+  const expiryDates = group.map((item) => item.confirmationExpiresAt?.toDate?.()).filter(Boolean);
+  const expiry = expiryDates.length ? new Date(Math.min(...expiryDates.map((item) => item.getTime()))) : null;
   function handleConfirmClick() {
     const whatsappWindow = booking.coachPhone ? window.open("about:blank", "_blank") : null;
     if (whatsappWindow) whatsappWindow.opener = null;
-    onConfirm(booking, whatsappWindow);
+    if (isBundle) onConfirmBundle(group, whatsappWindow);
+    else onConfirm(booking, whatsappWindow);
   }
-  return <CustomerShell user={user} profile={profile} title="Review your booking">
-    <BookingDetails booking={booking} />
+  return <CustomerShell user={user} profile={profile} title={isBundle ? "Review your session bundle" : "Review your booking"}>
+    {isBundle && <div className="mb-6 rounded-2xl border border-lime-400/30 bg-lime-400/5 p-5"><p className="text-sm text-lime-300">Bundle Reference</p><p className="mt-1 text-2xl font-bold text-lime-300">{booking.bundleReference}</p><p className="mt-2 text-sm text-neutral-300">{group.length} sessions with {booking.coachName}</p></div>}
+    <div className={isBundle ? "space-y-4" : ""}>{group.map((item, index) => <article key={item.id} className={isBundle ? "rounded-2xl border border-neutral-800 bg-neutral-950 p-5" : ""}>{isBundle && <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-lime-300">Session {index + 1}</p>}<BookingDetails booking={item} /></article>)}</div>
     {expiry && <p className="mt-4 text-sm text-amber-300">This slot is reserved until {expiry.toLocaleTimeString("en-MY", { hour: "numeric", minute: "2-digit" })}.</p>}
     <div className="mt-7 grid gap-3 sm:grid-cols-2">
-      <button type="button" onClick={handleConfirmClick} disabled={loading} className="rounded-2xl bg-lime-400 py-4 font-semibold text-black disabled:opacity-50">{loading ? "Confirming..." : "Confirm Booking"}</button>
-      <a href={`/booking?edit=${booking.id}`} className="rounded-2xl border border-neutral-700 py-4 text-center font-semibold">Edit Booking</a>
+      <button type="button" onClick={handleConfirmClick} disabled={loading} className="rounded-2xl bg-lime-400 py-4 font-semibold text-black disabled:opacity-50">{loading ? "Confirming..." : isBundle ? `Confirm ${group.length} Sessions` : "Confirm Booking"}</button>
+      {!isBundle && <a href={`/booking?edit=${booking.id}`} className="rounded-2xl border border-neutral-700 py-4 text-center font-semibold">Edit Booking</a>}
+      {isBundle && <a href="/my-bookings" className="rounded-2xl border border-neutral-700 py-4 text-center font-semibold">Confirm Later</a>}
     </div>
-    <SelectedCoachWhatsAppLink booking={booking} />
+    <SelectedCoachWhatsAppLink booking={booking} bookings={group} />
     {status && <p className="mt-4 text-sm text-neutral-300">{status}</p>}
   </CustomerShell>;
 }
 
 function CustomerShell({ user, profile, title, children }) {
-  return <div className="min-h-screen bg-neutral-950 px-4 py-6 text-white"><div className="mx-auto max-w-4xl"><CustomerHeader user={user} profile={profile} /><main className="rounded-3xl border border-neutral-800 bg-neutral-900 p-6 sm:p-8">{title && <h1 className="mb-6 text-3xl font-bold">{title}</h1>}{children}</main></div></div>;
+  return <div className="premium-app-page premium-customer-page min-h-screen bg-neutral-950 px-4 py-6 text-white"><div className="mx-auto max-w-4xl"><CustomerHeader user={user} profile={profile} /><main className="premium-panel rounded-3xl border border-neutral-800 bg-neutral-900 p-6 sm:p-8">{title && <h1 className="premium-page-title mb-6 text-3xl font-bold">{title}</h1>}{children}</main></div></div>;
 }
 
-function SuccessPage({ booking, user, profile }) {
-  if (!booking || booking.customerId !== user?.uid || String(booking.status).toLowerCase() !== "confirmed") return <CustomerShell user={user} profile={profile}><p>Confirmed booking not found.</p></CustomerShell>;
-  return <CustomerShell user={user} profile={profile} title="Booking Confirmed">
-    <p className="text-lg text-neutral-300">Your booking has been successfully confirmed.</p>
-    <div className="my-6 rounded-2xl bg-lime-400/10 p-5"><p className="text-sm text-lime-300">Booking Reference</p><p className="mt-1 text-2xl font-bold text-lime-300">{booking.bookingReference}</p></div>
-    <BookingDetails booking={booking} />
+function SuccessPage({ booking, bundleBookings = [], user, profile }) {
+  const group = bundleBookings.length > 1 ? [...bundleBookings].sort((a, b) => Number(a.bundleIndex || 0) - Number(b.bundleIndex || 0)) : [booking];
+  const isBundle = group.length > 1;
+  if (!booking || booking.customerId !== user?.uid || group.some((item) => String(item.status).toLowerCase() !== "confirmed")) return <CustomerShell user={user} profile={profile}><p>Confirmed booking not found.</p></CustomerShell>;
+  return <CustomerShell user={user} profile={profile} title={isBundle ? "Bundle Confirmed" : "Booking Confirmed"}>
+    <p className="text-lg text-neutral-300">Your {isBundle ? `${group.length}-session bundle has` : "booking has"} been successfully confirmed.</p>
+    <div className="my-6 rounded-2xl bg-lime-400/10 p-5"><p className="text-sm text-lime-300">{isBundle ? "Bundle Reference" : "Booking Reference"}</p><p className="mt-1 text-2xl font-bold text-lime-300">{isBundle ? booking.bundleReference : booking.bookingReference}</p></div>
+    <div className={isBundle ? "space-y-4" : ""}>{group.map((item, index) => <article key={item.id} className={isBundle ? "rounded-2xl border border-neutral-800 bg-neutral-950 p-5" : ""}>{isBundle && <div className="mb-2 flex items-center justify-between gap-3"><p className="text-xs font-semibold uppercase tracking-widest text-lime-300">Session {index + 1}</p><button type="button" onClick={() => downloadBookingPdf(item)} className="rounded-xl border border-neutral-700 px-3 py-2 text-xs">Download PDF</button></div>}<BookingDetails booking={item} /></article>)}</div>
     <div className="mt-7 grid gap-3 sm:grid-cols-3">
-      <button type="button" onClick={() => downloadBookingPdf(booking)} className="rounded-2xl bg-white py-3 font-semibold text-black">Download Booking PDF</button>
+      {!isBundle && <button type="button" onClick={() => downloadBookingPdf(booking)} className="rounded-2xl bg-white py-3 font-semibold text-black">Download Booking PDF</button>}
       <a href="/my-bookings" className="rounded-2xl border border-neutral-700 py-3 text-center font-semibold">View My Bookings</a>
       <a href="/booking" className="rounded-2xl border border-neutral-700 py-3 text-center font-semibold">Book Another Session</a>
     </div>
-    <SelectedCoachWhatsAppLink booking={booking} />
+    <SelectedCoachWhatsAppLink booking={booking} bookings={group} />
   </CustomerShell>;
 }
 
@@ -3513,6 +3616,9 @@ function ProfilePage({ user, profile }) {
 
 function BookingPage({
   selectedService,
+  coachingFormat,
+  setCoachingFormat,
+  editBookingId,
   customer,
   user,
   selectedCoachId,
@@ -3535,6 +3641,11 @@ function BookingPage({
   note,
   setNote,
   submitBooking,
+  addBundleSession,
+  removeBundleSession,
+  clearBundleSessions,
+  submitBundleBooking,
+  bundleSessions,
   loading,
   status,
   calendarMonth,
@@ -3543,20 +3654,22 @@ function BookingPage({
   monthDays,
   getDateStatus,
   selectedCoachBookings,
+  groupParticipants,
 }) {
   const courtBookingUrl = getCourtBookingUrl(location, courtOption);
+  const isFixedGroupCoaching = selectedService?.id === "group" || (selectedService?.id === "kids" && coachingFormat === "group");
 
   return (
-    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-neutral-950 text-white">
-      <div className="w-full max-w-6xl mx-auto px-4 py-8 sm:px-5 sm:py-12">
-        <div className="mb-6 flex items-center justify-between gap-3">
+    <div className="premium-app-page premium-booking-page min-h-screen w-full max-w-full overflow-x-hidden bg-neutral-950 text-white">
+      <div className="premium-booking-shell w-full max-w-6xl mx-auto px-4 py-8 sm:px-5 sm:py-12">
+        <div className="premium-page-nav mb-6 flex items-center justify-between gap-3">
           <a href="/" className="rounded-full border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-lime-400 hover:text-lime-300 transition">
             Back
           </a>
           <div className="flex items-center gap-3"><a href="/my-bookings" className="text-sm text-neutral-300 hover:text-lime-300">My Bookings</a><button type="button" onClick={() => signOut(auth)} className="rounded-full border border-neutral-700 px-4 py-2 text-sm">Sign Out</button></div>
         </div>
 
-        <div className="mb-8">
+        <div className="premium-booking-heading mb-8">
           <p className="inline-block rounded-full border border-lime-400/40 px-4 py-2 text-sm text-lime-300">
             Coach Ilham Academy
           </p>
@@ -3567,36 +3680,105 @@ function BookingPage({
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-          <div className="w-full max-w-full self-start bg-neutral-900 border border-neutral-800 rounded-3xl p-4 sm:p-6 md:p-8">
+          <div className="premium-panel premium-booking-form w-full max-w-full self-start bg-neutral-900 border border-neutral-800 rounded-3xl p-4 sm:p-6 md:p-8">
             <h2 className="text-2xl font-semibold mb-6">Booking Form</h2>
 
             <div className="space-y-4">
               <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-4"><p className="text-xs uppercase tracking-wide text-neutral-500">Booking For</p><p className="mt-2 font-semibold">{customer.fullName}</p><p className="text-sm text-neutral-400">{user.email}</p><p className="text-sm text-neutral-400">{customer.phone}</p></div>
-              <select
-                value={selectedCoachId}
-                onChange={(e) => setSelectedCoachId(e.target.value)}
-                className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400"
-              >
-                <option value="">Select Coach</option>
-                {publicCoachOptions.map((coach) => (
-                  <option key={coach.coachId} value={coach.coachId}>
-                    {coach.coachName}
-                  </option>
-                ))}
-              </select>
+              {selectedService?.id === "kids" && (
+                <div className="premium-coaching-format">
+                  <label>Coaching Option</label>
+                  <div>
+                    <button type="button" disabled={bundleSessions.length > 0} aria-pressed={coachingFormat === "private"} onClick={() => setCoachingFormat("private")} className={coachingFormat === "private" ? "is-selected" : ""}>
+                      <strong>Private Coaching</strong>
+                      <small>One-to-one or your own small group</small>
+                    </button>
+                    <button type="button" disabled={bundleSessions.length > 0} aria-pressed={coachingFormat === "group"} onClick={() => setCoachingFormat("group")} className={coachingFormat === "group" ? "is-selected" : ""}>
+                      <strong>Group Coaching</strong>
+                      <small>Join a scheduled group session</small>
+                    </button>
+                  </div>
+                </div>
+              )}
+              {isFixedGroupCoaching && (
+                <div className="premium-fixed-session-note">
+                  <strong>Group Coaching · Every Tuesday</strong>
+                  <span>8:00 PM–10:00 PM · RM60 per player · Maximum 6 players.</span>
+                </div>
+              )}
+              {!isFixedGroupCoaching && (
+                <select
+                  value={selectedCoachId}
+                  onChange={(e) => setSelectedCoachId(e.target.value)}
+                  disabled={bundleSessions.length > 0}
+                  className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400"
+                >
+                  <option value="">Select Coach</option>
+                  {publicCoachOptions.map((coach) => (
+                    <option key={coach.coachId} value={coach.coachId}>
+                      {coach.coachName}
+                    </option>
+                  ))}
+                </select>
+              )}
               <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
 
-              <select value={selectedBookingTime} onChange={(e) => setTime(e.target.value)} disabled={!selectedCoachId || availableSlots.length === 0} className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
-                {!selectedCoachId ? <option>Please select coach first</option> : availableSlots.length === 0 ? <option>No available slots</option> : availableSlots.map((slot) => <option key={slot}>{slot}</option>)}
-              </select>
+              {!isFixedGroupCoaching && <div className="premium-time-picker">
+                <div className="premium-time-picker-head">
+                  <span aria-hidden="true">◷</span>
+                  <span>{selectedCoachId ? `Available times · ${parseBookingDate(date).toLocaleDateString("en-MY", { day: "numeric", month: "short" })}` : "Choose a coach to view available times"}</span>
+                </div>
+                {selectedCoachId && availableSlots.length > 0 ? (
+                  <div className="premium-time-grid">
+                    {availableSlots.map((slot) => (
+                      <button
+                        key={slot}
+                        type="button"
+                        aria-pressed={selectedBookingTime === slot}
+                        onClick={() => setTime(slot)}
+                        className={`premium-time-slot ${selectedBookingTime === slot ? "is-selected" : ""}`}
+                      >
+                        {slot}
+                      </button>
+                    ))}
+                  </div>
+                ) : selectedCoachId ? (
+                  <p className="premium-time-empty">No available slots for this date.</p>
+                ) : null}
+              </div>}
 
-              {reservedForSelectedDate.length > 0 && (
+              {!isFixedGroupCoaching && !editBookingId && selectedCoachId && availableSlots.length > 0 && (
+                <button type="button" onClick={addBundleSession} className="premium-bundle-add w-full border border-lime-400 px-4 py-3 font-semibold text-lime-300">
+                  + Add this session to bundle
+                </button>
+              )}
+
+              {bundleSessions.length > 0 && (
+                <section className="premium-bundle-cart">
+                  <div className="premium-bundle-cart-head">
+                    <div><span>Session bundle</span><strong>{bundleSessions.length} session{bundleSessions.length === 1 ? "" : "s"}</strong></div>
+                    <button type="button" onClick={clearBundleSessions}>Clear all</button>
+                  </div>
+                  <div className="premium-bundle-list">
+                    {bundleSessions.map((session, index) => (
+                      <article key={session.clientId}>
+                        <span>{String(index + 1).padStart(2, "0")}</span>
+                        <div><strong>{session.date} · {session.time}</strong><small>{session.durationHours} hour(s) · {session.location}{session.courtOption ? ` · ${session.courtOption}` : ""}</small></div>
+                        <button type="button" onClick={() => removeBundleSession(session.clientId)} aria-label={`Remove ${session.date} ${session.time}`}>×</button>
+                      </article>
+                    ))}
+                  </div>
+                  <p>Coach is locked to {bundleSessions[0].coachName}. Choose another date and time above to add more sessions.</p>
+                </section>
+              )}
+
+              {!isFixedGroupCoaching && reservedForSelectedDate.length > 0 && (
                 <p className="text-sm text-neutral-400">
                   Unavailable: {[...new Set(reservedForSelectedDate.map((slot) => slot.time))].join(", ")}
                 </p>
               )}
 
-              <select
+              {!isFixedGroupCoaching && <select
                 value={location}
                 onChange={(e) => {
                   setLocation(e.target.value);
@@ -3606,9 +3788,9 @@ function BookingPage({
               >
                 <option>Tennis Nusa Duta</option>
                 <option>Client Preferred Location</option>
-              </select>
+              </select>}
 
-              {location === "Tennis Nusa Duta" && (
+              {!isFixedGroupCoaching && location === "Tennis Nusa Duta" && (
                 <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-4">
                   <label className="text-sm font-semibold text-neutral-200">Court Option</label>
                   <select
@@ -3624,15 +3806,23 @@ function BookingPage({
                     <a
                       href={courtBookingUrl}
                       target="_blank"
-                      className="mt-3 inline-block text-sm font-semibold text-lime-400 hover:text-lime-300"
+                      rel="noreferrer"
+                      className="premium-court-booking-cta mt-3"
                     >
-                      Open {courtOption} court booking &rarr;
+                      <span className="premium-court-booking-icon" aria-hidden="true">
+                        <ExternalLink size={18} />
+                      </span>
+                      <span>
+                        <strong>Check &amp; Book {courtOption} Court</strong>
+                        <small>Court reservation opens on the Stadium Johor website</small>
+                      </span>
+                      <span className="premium-court-booking-arrow" aria-hidden="true">&rarr;</span>
                     </a>
                   )}
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-4">
+              {!isFixedGroupCoaching && <div className="grid grid-cols-2 gap-4">
                 <select value={players} onChange={(e) => setPlayers(Number(e.target.value))} className="rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400">
                   <option value={1}>1 Player</option>
                   <option value={2}>2 Players</option>
@@ -3645,9 +3835,10 @@ function BookingPage({
                     min="0.5"
                     step="0.5"
                     value={duration}
+                    disabled={isFixedGroupCoaching}
                     onChange={(e) => setDuration(e.target.value)}
                     onBlur={() => {
-                      if (!duration || Number(duration) < 1) {
+                      if (!isFixedGroupCoaching && (!duration || Number(duration) < 1)) {
                         setDuration("1");
                       }
                     }}
@@ -3655,15 +3846,32 @@ function BookingPage({
                     className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 pr-20 outline-none focus:border-lime-400"
                   />
                   <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-sm text-neutral-400">
-                    hours
+                    {isFixedGroupCoaching ? "fixed hours" : "hours"}
                   </span>
                 </div>
-              </div>
+              </div>}
 
-              <textarea rows="4" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Notes" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
+              {isFixedGroupCoaching && (
+                <section className="premium-group-roster">
+                  <div className="premium-group-roster-head">
+                    <div><span>Players joining</span><strong>{groupParticipants.length} / {groupCoachingCapacity} registered</strong></div>
+                    <div>RM{groupCoachingFeePerPlayer}<small>per player</small></div>
+                  </div>
+                  {groupParticipants.length > 0 ? (
+                    <ol>{groupParticipants.map((participant, index) => <li key={participant.id || `${participant.customerName}-${index}`}><span>{index + 1}</span><strong>{participant.customerName || participant.name || "Registered player"}</strong></li>)}</ol>
+                  ) : (
+                    <p>Be the first player to join this session.</p>
+                  )}
+                  {groupParticipants.length < groupCoachingCapacity && (
+                    <p className="premium-group-seats-left">{groupCoachingCapacity - groupParticipants.length} place{groupCoachingCapacity - groupParticipants.length === 1 ? "" : "s"} remaining</p>
+                  )}
+                </section>
+              )}
 
-              <button onClick={submitBooking} disabled={loading || !selectedCoachId || availableSlots.length === 0} className="w-full bg-white text-black rounded-2xl py-4 font-semibold hover:bg-neutral-200 transition disabled:opacity-50">
-                {loading ? "Please wait..." : "Book Now"}
+              {!isFixedGroupCoaching && <textarea rows="4" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Notes" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />}
+
+              <button onClick={bundleSessions.length > 0 ? submitBundleBooking : submitBooking} disabled={loading || (isFixedGroupCoaching ? groupParticipants.length >= groupCoachingCapacity || availableSlots.length === 0 : (!bundleSessions.length && (!selectedCoachId || availableSlots.length === 0)))} className="w-full bg-white text-black rounded-2xl py-4 font-semibold hover:bg-neutral-200 transition disabled:opacity-50">
+                {loading ? "Please wait..." : isFixedGroupCoaching ? groupParticipants.length >= groupCoachingCapacity ? "Group Full" : "Register for Group Coaching · RM60" : bundleSessions.length > 0 ? `Reserve Bundle (${bundleSessions.length})` : "Book Now"}
               </button>
 
               {status && <p className="text-sm text-neutral-300">{status}</p>}
@@ -3671,7 +3879,7 @@ function BookingPage({
           </div>
 
           <div className="space-y-6">
-            <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8">
+            <div className="premium-panel premium-calendar bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8">
               <div className="flex items-center justify-between gap-3 mb-6">
                 <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))} className="rounded-xl border border-neutral-700 px-3 py-2">&larr;</button>
                 <h2 className="text-2xl font-semibold text-center">{monthLabel}</h2>
@@ -3691,13 +3899,14 @@ function BookingPage({
                   const today = new Date();
                   today.setHours(0, 0, 0, 0);
                   const isPast = day && day < today;
+                  const isUnavailableGroupDay = Boolean(day && isFixedGroupCoaching && day.getDay() !== 2);
 
                   return (
                     <button
                       key={index}
-                      disabled={!day || isPast}
+                      disabled={!day || isPast || isUnavailableGroupDay}
                       onClick={() => day && setDate(dayString)}
-                      className={`min-h-20 rounded-2xl border p-2 text-left transition ${isPast
+                      className={`min-h-20 rounded-2xl border p-2 text-left transition ${isPast || isUnavailableGroupDay
                         ? "opacity-30 cursor-not-allowed border-neutral-900 bg-neutral-950"
                         : isSelected
                           ? "border-lime-400 bg-lime-400 text-black"
@@ -3766,8 +3975,10 @@ export default function App() {
   const [time, setTime] = useState("8:00 AM");
   const [location, setLocation] = useState("Tennis Nusa Duta");
   const [courtOption, setCourtOption] = useState("");
+  const [coachingFormat, setCoachingFormat] = useState(() => selectedService?.id === "group" ? "group" : selectedService?.id === "sparring" ? "sparring" : "private");
   const [selectedCoachId, setSelectedCoachId] = useState("");
   const [note, setNote] = useState("");
+  const [bundleSessions, setBundleSessions] = useState([]);
   const [bookings, setBookings] = useState([]);
   const [packages, setPackages] = useState([]);
   const [notifications, setNotifications] = useState([]);
@@ -3791,7 +4002,8 @@ export default function App() {
   const staleLockCleanupStartedRef = useRef(false);
 
   const durationHours = getBookingDuration({ duration });
-  const price = useMemo(() => calculateCoachingFee(players, durationHours), [players, durationHours]);
+  const isFixedGroupCoaching = selectedService?.id === "group" || (selectedService?.id === "kids" && coachingFormat === "group");
+  const price = useMemo(() => isFixedGroupCoaching ? groupCoachingFeePerPlayer : calculateCoachingFee(players, durationHours), [durationHours, isFixedGroupCoaching, players]);
   const selectedCoachBookings = useMemo(() => {
     if (!selectedCoachId) return [];
 
@@ -3831,15 +4043,29 @@ export default function App() {
     return getExpandedReservedSlots(selectedCoachBookings, dayRange);
   }, [date, selectedCoachBookings, selectedCoachId]);
 
+  const groupParticipants = useMemo(() => {
+    if (!isFixedGroupCoaching) return [];
+    return bookings
+      .filter((booking) => {
+        if (!booking.isSlotLock || !isGroupCoachingBooking(booking) || booking.date !== date) return false;
+        return isReservedBooking(booking);
+      })
+      .sort((a, b) => Number(a.groupSeatNumber || 0) - Number(b.groupSeatNumber || 0));
+  }, [bookings, date, isFixedGroupCoaching]);
+
   const availableSlots = useMemo(() => {
     if (!selectedCoachId) return [];
 
-    return allTimeSlots.filter(
+    const candidateSlots = isFixedGroupCoaching
+      ? (parseBookingDate(date).getDay() === 2 && groupParticipants.length < groupCoachingCapacity ? ["8:00 PM"] : [])
+      : allTimeSlots;
+
+    return candidateSlots.filter(
       (slot) =>
         !isPastTimeSlot(date, slot) &&
-        !hasBookingOverlap(selectedCoachBookings, date, slot, durationHours)
+        (isFixedGroupCoaching || !hasBookingOverlap(selectedCoachBookings, date, slot, durationHours))
     );
-  }, [date, durationHours, selectedCoachBookings, selectedCoachId]);
+  }, [date, durationHours, groupParticipants.length, isFixedGroupCoaching, selectedCoachBookings, selectedCoachId]);
   const selectedBookingTime = availableSlots.includes(time) ? time : availableSlots[0] || "";
   const publicCoachOptions = useMemo(() => {
     const coachesById = new Map();
@@ -4006,8 +4232,50 @@ export default function App() {
     setLocation(booking.location || "Tennis Nusa Duta");
     setCourtOption(booking.court || booking.courtOption || "");
     setSelectedCoachId(booking.coachId || "");
+    setCoachingFormat(booking.coachingFormat || (booking.serviceType === "group" ? "group" : booking.serviceType === "sparring" ? "sparring" : "private"));
     setNote(booking.notes || booking.note || "");
   }, [adminUser, bookings, editBookingId]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  /* Keep the booking format aligned with services that have a fixed format. */
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (editBookingId) return;
+    if (selectedService?.id === "group") setCoachingFormat("group");
+    else if (selectedService?.id === "sparring") setCoachingFormat("sparring");
+    else if (selectedService?.id !== "kids") setCoachingFormat("private");
+  }, [editBookingId, selectedService?.id]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  /* Group coaching currently runs as one fixed two-hour session every Tuesday. */
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (!isFixedGroupCoaching || editBookingId) return;
+    setDuration("2");
+    setTime("8:00 PM");
+
+    const selected = parseBookingDate(date);
+    const now = new Date();
+    const today = new Date(now);
+    today.setHours(0, 0, 0, 0);
+    const selectedSessionHasPassed = formatDate(selected) === formatDate(today) && isPastTimeSlot(formatDate(today), "8:00 PM");
+    if (selected.getDay() !== 2 || selected < today || selectedSessionHasPassed) {
+      const searchFrom = new Date(today);
+      if (today.getDay() === 2 && isPastTimeSlot(formatDate(today), "8:00 PM")) {
+        searchFrom.setDate(searchFrom.getDate() + 1);
+      }
+      setDate(getNextTuesdayDate(searchFrom));
+    }
+  }, [date, editBookingId, isFixedGroupCoaching]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  /* The coach is assigned automatically for group registration and stays hidden from customers. */
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (!isFixedGroupCoaching || editBookingId || bundleSessions.length > 0 || publicCoachOptions.length === 0) return;
+    const assignedCoach = publicCoachOptions.find((coach) => isPrimaryIlhamCoachName(coach.coachName)) || publicCoachOptions[0];
+    if (assignedCoach && selectedCoachId !== assignedCoach.coachId) setSelectedCoachId(assignedCoach.coachId);
+  }, [bundleSessions.length, editBookingId, isFixedGroupCoaching, publicCoachOptions, selectedCoachId]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
@@ -4105,7 +4373,9 @@ export default function App() {
         if (!currentSnapshot.exists()) return;
         const current = currentSnapshot.data();
         if (current.status !== "pending_confirmation" || (current.confirmationExpiresAt?.toMillis?.() || Infinity) > Date.now()) return;
-        const lockRefs = getRequestedSlotKeys(current.date, current.startTime || current.time, current.durationHours || current.duration).map((slot) => doc(db, "availabilityLocks", getSlotLockId(current.coachId, current.date, slot)));
+        const lockRefs = isGroupCoachingBooking(current) && current.groupSeatNumber
+          ? [doc(db, "availabilityLocks", getGroupSeatLockId(current.coachId, current.date, current.groupSeatNumber))]
+          : getRequestedSlotKeys(current.date, current.startTime || current.time, current.durationHours || current.duration).map((slot) => doc(db, "availabilityLocks", getSlotLockId(current.coachId, current.date, slot)));
         const locks = [];
         for (const lockRef of lockRefs) locks.push(await transaction.get(lockRef));
         transaction.update(bookingRef, { status: "expired", bookingStatus: "Expired", updatedAt: serverTimestamp() });
@@ -4144,7 +4414,7 @@ export default function App() {
           sourceCoachId: lockDoc.data().coachId || "",
           coachId: selectedCoachId,
           time: getAvailabilityLockTime(lockDoc.data()),
-          duration: 1,
+          duration: Number(lockDoc.data().duration || 1),
           bookingStatus: lockDoc.data().status,
           isSlotLock: true,
         }));
@@ -4324,6 +4594,196 @@ export default function App() {
     return unsubscribe;
   }, [adminProfile, adminUser, isAdminPage]);
 
+  function addBundleSession() {
+    if (!date || !selectedBookingTime || !selectedCoach) return setStatus("Please select a date, time and coach.");
+    if (isFixedGroupCoaching && (parseBookingDate(date).getDay() !== 2 || selectedBookingTime !== "8:00 PM" || durationHours !== 2)) {
+      return setStatus("Group Coaching is only available every Tuesday from 8:00 PM to 10:00 PM.");
+    }
+    if (location === "Tennis Nusa Duta" && !courtOption) return setStatus("Please choose Indoor Court or Outdoor Court.");
+    if (bundleSessions.length >= 12) return setStatus("A bundle can contain up to 12 sessions.");
+    if (bundleSessions.length > 0 && bundleSessions[0].coachId !== selectedCoach.coachId) return setStatus("All bundle sessions must use the same coach.");
+
+    const requested = getRequestedSlotKeys(date, selectedBookingTime, durationHours);
+    const overlapsBundle = bundleSessions.some((session) => {
+      if (session.date !== date) return false;
+      const existing = getRequestedSlotKeys(session.date, session.time, session.durationHours);
+      return requested.some((slot) => existing.includes(slot));
+    });
+    if (overlapsBundle) return setStatus("This session overlaps another session already in your bundle.");
+
+    const clientId = `${selectedCoach.coachId}_${date}_${selectedBookingTime}_${durationHours}`;
+    setBundleSessions((sessions) => [...sessions, {
+      clientId,
+      coachId: selectedCoach.coachId,
+      coachName: selectedCoach.coachName,
+      coachEmail: selectedCoach.coachEmail,
+      coachPhone: selectedCoach.coachPhone,
+      date,
+      time: selectedBookingTime,
+      durationHours,
+      players: isFixedGroupCoaching ? 1 : players,
+      location,
+      courtOption: location === "Tennis Nusa Duta" ? courtOption : "",
+      coachingFormat,
+      coachingFee: price,
+    }].sort((a, b) => a.date.localeCompare(b.date) || allTimeSlots.indexOf(a.time) - allTimeSlots.indexOf(b.time)));
+    setStatus("Session added. Choose another date and time, then add it to the bundle.");
+  }
+
+  function removeBundleSession(clientId) {
+    setBundleSessions((sessions) => sessions.filter((session) => session.clientId !== clientId));
+    setStatus("");
+  }
+
+  function clearBundleSessions() {
+    setBundleSessions([]);
+    setStatus("");
+  }
+
+  async function submitBundleBooking() {
+    if (submittingRef.current || bundleSessions.length === 0) return;
+    if (!adminUser || !customerProfile?.profileCompleted) return setStatus("Please sign in and complete your profile first.");
+
+    const expiresAt = Timestamp.fromMillis(Date.now() + 10 * 60 * 1000);
+    const bundleId = doc(collection(db, "bookings")).id;
+    const bundleReference = `ILHAM-BUNDLE-${Date.now().toString().slice(-8)}`;
+    const records = bundleSessions.map((session, index) => {
+      const bookingRef = doc(collection(db, "bookings"));
+      const requestedSlots = getRequestedSlotKeys(session.date, session.time, session.durationHours);
+      return { session, index, bookingRef, bookingId: bookingRef.id, requestedSlots };
+    });
+    const lockEntries = records.flatMap((record) => record.requestedSlots.map((slot) => ({
+      record,
+      slot,
+      lockRef: doc(db, "availabilityLocks", getSlotLockId(record.session.coachId, record.session.date, slot)),
+    })));
+    if (new Set(lockEntries.map((entry) => entry.lockRef.id)).size !== lockEntries.length) return setStatus("Two sessions in this bundle overlap. Please remove one of them.");
+
+    submittingRef.current = true;
+    setLoading(true);
+    setStatus("Reserving all bundle sessions...");
+
+    try {
+      await runTransaction(db, async (transaction) => {
+        const lockSnapshots = [];
+        for (const entry of lockEntries) lockSnapshots.push(await transaction.get(entry.lockRef));
+        lockSnapshots.forEach((snapshot) => {
+          const lock = snapshot.data();
+          const lockExpiry = lock?.confirmationExpiresAt?.toMillis?.() || 0;
+          if (lock && lock.status !== "expired" && (lock.status !== "pending_confirmation" || lockExpiry > Date.now())) {
+            throw new Error("One of the bundle slots is no longer available. No sessions were reserved.");
+          }
+        });
+
+        records.forEach(({ session, index, bookingRef, bookingId, requestedSlots }) => {
+          const bookingData = {
+            customerId: adminUser.uid,
+            customerName: customerProfile.fullName,
+            customerEmail: adminUser.email || customerProfile.email,
+            customerPhone: customerProfile.phone,
+            name: customerProfile.fullName,
+            phone: customerProfile.phone,
+            date: session.date,
+            time: session.time,
+            startTime: session.time,
+            endTime: getEndTime(session.time, session.durationHours),
+            players: session.players,
+            duration: session.durationHours,
+            durationHours: session.durationHours,
+            location: session.location,
+            courtOption: session.courtOption,
+            court: session.courtOption,
+            coachingFee: session.coachingFee,
+            paymentStatus: "Unpaid",
+            bookingStatus: "Pending Confirmation",
+            status: "pending_confirmation",
+            confirmationExpiresAt: expiresAt,
+            confirmationEmailSent: false,
+            confirmationEmailStatus: "pending",
+            adminNotificationEmailStatus: "pending",
+            pdfGenerated: false,
+            note,
+            notes: note,
+            type: "booking",
+            serviceType: selectedService?.id || "",
+            serviceName: selectedService?.title || "",
+            coachingFormat: session.coachingFormat || coachingFormat,
+            paymentType: "pay_per_session",
+            createdBy: "",
+            coachId: session.coachId,
+            coachName: session.coachName,
+            coachEmail: session.coachEmail,
+            coachPhone: session.coachPhone,
+            bundleId,
+            bundleReference,
+            bundleIndex: index + 1,
+            bundleSize: records.length,
+            role: "customer",
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          };
+          transaction.set(bookingRef, bookingData);
+          requestedSlots.forEach((slot) => transaction.set(doc(db, "availabilityLocks", getSlotLockId(session.coachId, session.date, slot)), {
+            bookingId,
+            bundleId,
+            customerId: adminUser.uid,
+            coachId: session.coachId,
+            date: session.date,
+            time: getAvailabilityLockTime({ date: session.date, time: slot }),
+            status: "pending_confirmation",
+            confirmationExpiresAt: expiresAt,
+            updatedAt: serverTimestamp(),
+          }));
+        });
+
+        const first = records[0];
+        transaction.set(doc(db, "notifications", first.bookingId), {
+          bookingId: first.bookingId,
+          bundleId,
+          bundleReference,
+          sessionCount: records.length,
+          customerId: adminUser.uid,
+          coachId: first.session.coachId,
+          title: "New bundle booking request",
+          message: `${customerProfile.fullName} requested a bundle of ${records.length} sessions.`,
+          name: customerProfile.fullName,
+          phone: customerProfile.phone,
+          email: adminUser.email || customerProfile.email || "",
+          date: first.session.date,
+          time: first.session.time,
+          isRead: false,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      });
+
+      const bookingIds = records.map((record) => record.bookingId);
+      try {
+        const token = await adminUser.getIdToken();
+        const response = await fetch("/api/send-admin-bundle-notification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ bookingIds }),
+        });
+        const responseData = await response.json();
+        if (!response.ok || !responseData.ok) throw new Error(responseData.error || "Bundle notification email could not be sent");
+        await Promise.all(records.map((record) => updateDoc(record.bookingRef, { adminNotificationEmailStatus: "sent", adminNotificationEmailSentAt: serverTimestamp(), updatedAt: serverTimestamp() })));
+      } catch (emailError) {
+        console.error(emailError);
+        await Promise.all(records.map((record) => updateDoc(record.bookingRef, { adminNotificationEmailStatus: "failed", updatedAt: serverTimestamp() }).catch(console.error)));
+      }
+
+      setBundleSessions([]);
+      window.location.assign(`/booking/confirm/${records[0].bookingId}`);
+    } catch (error) {
+      console.error(error);
+      setStatus(error instanceof Error ? error.message : "Bundle could not be reserved.");
+    } finally {
+      submittingRef.current = false;
+      setLoading(false);
+    }
+  }
+
   async function submitBooking() {
     if (submittingRef.current) return;
     if (!adminUser || !customerProfile?.profileCompleted) {
@@ -4334,8 +4794,20 @@ export default function App() {
       setStatus("Please select a date, time and coach.");
       return;
     }
+    if (isFixedGroupCoaching && (parseBookingDate(date).getDay() !== 2 || selectedBookingTime !== "8:00 PM" || durationHours !== 2)) {
+      setStatus("Group Coaching is only available every Tuesday from 8:00 PM to 10:00 PM.");
+      return;
+    }
+    if (isFixedGroupCoaching && groupParticipants.length >= groupCoachingCapacity) {
+      setStatus("This Group Coaching session is already full.");
+      return;
+    }
+    if (isFixedGroupCoaching && bookings.some((booking) => booking.customerId === adminUser.uid && booking.date === date && isGroupCoachingBooking(booking) && isReservedBooking(booking))) {
+      setStatus("You are already registered for this Group Coaching session.");
+      return;
+    }
 
-    if (location === "Tennis Nusa Duta" && !courtOption) {
+    if (!isFixedGroupCoaching && location === "Tennis Nusa Duta" && !courtOption) {
       setStatus("Please choose Indoor Court or Outdoor Court.");
       return;
     }
@@ -4365,9 +4837,9 @@ export default function App() {
       players,
       duration: durationHours,
       durationHours,
-      location,
-      courtOption: location === "Tennis Nusa Duta" ? courtOption : "",
-      court: location === "Tennis Nusa Duta" ? courtOption : "",
+      location: isFixedGroupCoaching ? "Group Coaching Session" : location,
+      courtOption: isFixedGroupCoaching ? "" : location === "Tennis Nusa Duta" ? courtOption : "",
+      court: isFixedGroupCoaching ? "" : location === "Tennis Nusa Duta" ? courtOption : "",
       coachingFee: price,
       paymentStatus: "Unpaid",
       bookingStatus: "Pending Confirmation",
@@ -4382,6 +4854,9 @@ export default function App() {
       type: "booking",
       serviceType: selectedService?.id || "",
       serviceName: selectedService?.title || "",
+      coachingFormat,
+      groupCapacity: isFixedGroupCoaching ? groupCoachingCapacity : null,
+      ratePerPlayer: isFixedGroupCoaching ? groupCoachingFeePerPlayer : null,
       paymentType: "pay_per_session",
       createdBy: "",
       coachId: selectedCoach.coachId,
@@ -4402,6 +4877,69 @@ export default function App() {
         const existing = existingSnapshot?.exists() ? existingSnapshot.data() : null;
         if (existing && existing.customerId !== adminUser.uid) throw new Error("You cannot edit this booking.");
         if (existing && existing.status !== "pending_confirmation") throw new Error("Only a pending booking can be edited.");
+
+        if (isFixedGroupCoaching) {
+          const seatRefs = Array.from({ length: groupCoachingCapacity }, (_, index) =>
+            doc(db, "availabilityLocks", getGroupSeatLockId(selectedCoach.coachId, date, index + 1))
+          );
+          const seatSnapshots = [];
+          for (const seatRef of seatRefs) seatSnapshots.push(await transaction.get(seatRef));
+          const now = Date.now();
+          const existingSeatIndex = existing?.groupSeatNumber ? Number(existing.groupSeatNumber) - 1 : -1;
+          const availableSeatIndex = existingSeatIndex >= 0
+            ? existingSeatIndex
+            : seatSnapshots.findIndex((seatSnapshot) => {
+              if (!seatSnapshot.exists()) return true;
+              const lock = seatSnapshot.data();
+              const lockExpiry = lock.confirmationExpiresAt?.toMillis?.() || 0;
+              return lock.status === "expired" || (lock.status === "pending_confirmation" && lockExpiry <= now);
+            });
+          if (availableSeatIndex < 0) throw new Error("This Group Coaching session is already full.");
+          const seatNumber = availableSeatIndex + 1;
+          const seatRef = seatRefs[availableSeatIndex];
+          const currentSeatLock = seatSnapshots[availableSeatIndex]?.data();
+          if (currentSeatLock && currentSeatLock.bookingId !== bookingId && currentSeatLock.status !== "expired" && !(currentSeatLock.status === "pending_confirmation" && (currentSeatLock.confirmationExpiresAt?.toMillis?.() || 0) <= now)) {
+            throw new Error("This Group Coaching place was just taken. Please try again.");
+          }
+
+          transaction.set(bookingRef, { ...bookingData, groupSeatNumber: seatNumber, createdAt: existing?.createdAt || serverTimestamp() }, { merge: true });
+          transaction.set(seatRef, {
+            bookingId,
+            customerId: adminUser.uid,
+            customerName: customerProfile.fullName,
+            coachId: selectedCoach.coachId,
+            date,
+            time: getAvailabilityLockTime({ date, time: "8:00 PM" }),
+            duration: 2,
+            coachingFormat: "group",
+            serviceType: selectedService?.id || "group",
+            groupSeatNumber: seatNumber,
+            groupCapacity: groupCoachingCapacity,
+            ratePerPlayer: groupCoachingFeePerPlayer,
+            status: "pending_confirmation",
+            confirmationExpiresAt: expiresAt,
+            updatedAt: serverTimestamp(),
+          });
+          transaction.set(notificationRef, {
+            bookingId,
+            customerId: adminUser.uid,
+            coachId: selectedCoach.coachId,
+            title: "New group coaching registration",
+            message: `${customerProfile.fullName} registered for Group Coaching on ${date}, 8:00 PM–10:00 PM.`,
+            name: customerProfile.fullName,
+            phone: customerProfile.phone,
+            email: adminUser.email || customerProfile.email || "",
+            date,
+            time: "8:00 PM",
+            duration: 2,
+            location: "Group Coaching Session",
+            courtOption: "",
+            isRead: false,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          }, { merge: true });
+          return;
+        }
 
         const oldSlots = existing ? getRequestedSlotKeys(existing.date, existing.startTime || existing.time, existing.durationHours || existing.duration) : [];
         const allKeys = [...new Set([...oldSlots, ...requestedSlots])];
@@ -4497,7 +5035,9 @@ export default function App() {
         }
         if (current.status !== "pending_confirmation") throw new Error("This booking can no longer be confirmed.");
         const slots = getRequestedSlotKeys(current.date, current.startTime || current.time, current.durationHours || current.duration);
-        const lockRefs = slots.map((slot) => doc(db, "availabilityLocks", getSlotLockId(current.coachId, current.date, slot)));
+        const lockRefs = isGroupCoachingBooking(current) && current.groupSeatNumber
+          ? [doc(db, "availabilityLocks", getGroupSeatLockId(current.coachId, current.date, current.groupSeatNumber))]
+          : slots.map((slot) => doc(db, "availabilityLocks", getSlotLockId(current.coachId, current.date, slot)));
         const lockSnapshots = [];
         for (const lockRef of lockRefs) lockSnapshots.push(await transaction.get(lockRef));
         if ((current.confirmationExpiresAt?.toMillis?.() || 0) <= Date.now()) {
@@ -4557,12 +5097,107 @@ export default function App() {
     }
   }
 
+  async function confirmBundleBookings(bundleBookings, whatsappWindow = null) {
+    if (!adminUser || bundleBookings.length < 2 || submittingRef.current) return;
+    const ordered = [...bundleBookings].sort((a, b) => Number(a.bundleIndex || 0) - Number(b.bundleIndex || 0));
+    submittingRef.current = true;
+    setLoading(true);
+    setStatus("Checking and confirming all bundle sessions...");
+    let confirmedBookings = [];
+    let reservationExpired = false;
+
+    try {
+      await runTransaction(db, async (transaction) => {
+        const bookingRefs = ordered.map((booking) => doc(db, "bookings", booking.id));
+        const bookingSnapshots = [];
+        for (const bookingRef of bookingRefs) bookingSnapshots.push(await transaction.get(bookingRef));
+        if (bookingSnapshots.some((snapshot) => !snapshot.exists())) throw new Error("One or more bundle sessions could not be found.");
+
+        const currents = bookingSnapshots.map((snapshot, index) => ({ id: ordered[index].id, ...snapshot.data() }));
+        const bundleId = currents[0].bundleId;
+        if (!bundleId || currents.some((current) => current.bundleId !== bundleId || current.customerId !== adminUser.uid)) throw new Error("You do not have access to this bundle.");
+        if (currents.some((current) => !["pending_confirmation", "confirmed"].includes(current.status))) throw new Error("This bundle can no longer be confirmed.");
+
+        const lockEntries = currents.flatMap((current, bookingIndex) => getRequestedSlotKeys(current.date, current.startTime || current.time, current.durationHours || current.duration).map((slot) => ({
+          current,
+          bookingIndex,
+          lockRef: doc(db, "availabilityLocks", getSlotLockId(current.coachId, current.date, slot)),
+        })));
+        const lockSnapshots = [];
+        for (const entry of lockEntries) lockSnapshots.push(await transaction.get(entry.lockRef));
+
+        if (currents.some((current) => current.status === "pending_confirmation" && (current.confirmationExpiresAt?.toMillis?.() || 0) <= Date.now())) {
+          currents.forEach((current, index) => {
+            if (current.status === "pending_confirmation") transaction.update(bookingRefs[index], { status: "expired", bookingStatus: "Expired", updatedAt: serverTimestamp() });
+          });
+          lockEntries.forEach((entry, index) => {
+            const lock = lockSnapshots[index];
+            if (lock.exists() && lock.data().bookingId === entry.current.id && entry.current.status === "pending_confirmation") transaction.delete(entry.lockRef);
+          });
+          reservationExpired = true;
+          return;
+        }
+
+        lockEntries.forEach((entry, index) => {
+          const lock = lockSnapshots[index];
+          if (!lock.exists() || lock.data().bookingId !== entry.current.id) throw new Error(`The slot on ${entry.current.date} at ${entry.current.time} is no longer available.`);
+        });
+
+        confirmedBookings = currents.map((current, index) => {
+          if (current.status === "confirmed") return current;
+          const updates = {
+            status: "confirmed",
+            bookingStatus: "Confirmed",
+            bookingReference: current.bookingReference || getBookingReference(current.id, current.date),
+            confirmedAt: serverTimestamp(),
+            pdfGenerated: true,
+            confirmationEmailStatus: current.confirmationEmailSent ? "sent" : "pending",
+            updatedAt: serverTimestamp(),
+          };
+          transaction.update(bookingRefs[index], updates);
+          return { ...current, ...updates };
+        });
+        lockEntries.forEach((entry) => transaction.update(entry.lockRef, { status: "confirmed", confirmationExpiresAt: null, updatedAt: serverTimestamp() }));
+      });
+
+      if (reservationExpired) throw new Error("Your bundle reservation has expired. Please select the sessions again.");
+
+      try {
+        const bookingIds = confirmedBookings.map((booking) => booking.id);
+        const token = await adminUser.getIdToken();
+        const response = await fetch("/api/send-bundle-confirmation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ bookingIds }),
+        });
+        if (!response.ok) throw new Error("Bundle confirmation email delivery failed");
+        await Promise.all(bookingIds.map((bookingId) => updateDoc(doc(db, "bookings", bookingId), { confirmationEmailSent: true, confirmationEmailSentAt: serverTimestamp(), confirmationEmailStatus: "sent", updatedAt: serverTimestamp() })));
+      } catch (emailError) {
+        console.error(emailError);
+        await Promise.all(confirmedBookings.map((booking) => updateDoc(doc(db, "bookings", booking.id), { confirmationEmailStatus: "failed", updatedAt: serverTimestamp() }).catch(console.error)));
+      }
+
+      const whatsappUrl = getBundleWhatsAppUrl(confirmedBookings[0]?.coachPhone, confirmedBookings);
+      if (whatsappWindow && whatsappUrl) whatsappWindow.location.href = whatsappUrl;
+      else if (whatsappWindow) whatsappWindow.close();
+      window.location.assign(`/booking/success/${confirmedBookings[0].id}`);
+    } catch (error) {
+      if (whatsappWindow && !whatsappWindow.closed) whatsappWindow.close();
+      console.error(error);
+      setStatus(error instanceof Error ? error.message : "Bundle could not be confirmed.");
+    } finally {
+      submittingRef.current = false;
+      setLoading(false);
+    }
+  }
+
   const monthDays = getMonthDays(calendarMonth);
   const monthLabel = calendarMonth.toLocaleString("default", { month: "long", year: "numeric" });
 
   function getDateStatus(day) {
     if (!day) return null;
     if (!selectedCoachId) return "Select coach";
+    if (isFixedGroupCoaching && day.getDay() !== 2) return "Unavailable";
 
     const dayString = formatDate(day);
     const dayRange = {
@@ -4570,6 +5205,16 @@ export default function App() {
       end: parseBookingDate(dayString),
     };
     dayRange.end.setDate(dayRange.end.getDate() + 1);
+    if (isFixedGroupCoaching) {
+      const registeredCount = bookings.filter((booking) => {
+        if (!booking.isSlotLock || !isGroupCoachingBooking(booking) || booking.date !== dayString) return false;
+        return isReservedBooking(booking);
+      }).length;
+      return registeredCount >= groupCoachingCapacity
+        ? "full"
+        : `${groupCoachingCapacity - registeredCount} places left`;
+    }
+
     const bookedCount = getExpandedReservedSlots(selectedCoachBookings, dayRange).length;
 
     if (bookedCount >= allTimeSlots.length) return "full";
@@ -4598,9 +5243,16 @@ export default function App() {
 
   if (isCustomerPage) {
     let page = null;
+    const confirmationBooking = confirmationBookingId ? bookings.find((item) => item.id === confirmationBookingId) : null;
+    const confirmationBundleBookings = confirmationBooking?.bundleId ? bookings.filter((item) => item.bundleId === confirmationBooking.bundleId) : [];
+    const successBooking = successBookingId ? bookings.find((item) => item.id === successBookingId) : null;
+    const successBundleBookings = successBooking?.bundleId ? bookings.filter((item) => item.bundleId === successBooking.bundleId) : [];
     if (isBookingPage) page = (
       <BookingPage
         selectedService={selectedService}
+        coachingFormat={coachingFormat}
+        setCoachingFormat={setCoachingFormat}
+        editBookingId={editBookingId}
         customer={customerProfile}
         user={adminUser}
         selectedCoachId={selectedCoachId}
@@ -4623,6 +5275,11 @@ export default function App() {
         note={note}
         setNote={setNote}
         submitBooking={submitBooking}
+        addBundleSession={addBundleSession}
+        removeBundleSession={removeBundleSession}
+        clearBundleSessions={clearBundleSessions}
+        submitBundleBooking={submitBundleBooking}
+        bundleSessions={bundleSessions}
         loading={loading}
         status={status}
         calendarMonth={calendarMonth}
@@ -4631,10 +5288,11 @@ export default function App() {
         monthDays={monthDays}
         getDateStatus={getDateStatus}
         selectedCoachBookings={selectedCoachBookings}
+        groupParticipants={groupParticipants}
       />
     );
-    if (confirmationBookingId) page = <ConfirmationPage booking={bookings.find((item) => item.id === confirmationBookingId)} user={adminUser} profile={customerProfile} onConfirm={confirmBooking} loading={loading} status={status} />;
-    if (successBookingId) page = <SuccessPage booking={bookings.find((item) => item.id === successBookingId)} user={adminUser} profile={customerProfile} />;
+    if (confirmationBookingId) page = <ConfirmationPage booking={confirmationBooking} bundleBookings={confirmationBundleBookings} user={adminUser} profile={customerProfile} onConfirm={confirmBooking} onConfirmBundle={confirmBundleBookings} loading={loading} status={status} />;
+    if (successBookingId) page = <SuccessPage booking={successBooking} bundleBookings={successBundleBookings} user={adminUser} profile={customerProfile} />;
     if (currentPath === "/my-bookings") page = <MyBookingsPage bookings={bookings} packages={packages} user={adminUser} profile={customerProfile} />;
     if (detailBookingId) page = <BookingDetailPage booking={bookings.find((item) => item.id === detailBookingId)} user={adminUser} profile={customerProfile} />;
     if (currentPath === "/my-profile") page = <ProfilePage user={adminUser} profile={customerProfile} />;
