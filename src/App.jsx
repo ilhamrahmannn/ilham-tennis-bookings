@@ -1,7 +1,7 @@
-import coachImage from "./assets/ilham.jpg";
+﻿import coachImage from "./assets/ilham.jpg";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, signOut } from "firebase/auth";
 import { Timestamp, addDoc, collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, query, runTransaction, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
-import { Bell, ExternalLink, MessageCircle } from "lucide-react";
+import { Bell, ClipboardCopy, Download, ExternalLink, MessageCircle, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { auth, db } from "./firebase";
 import { downloadBookingPdf } from "./bookingPdf";
@@ -82,12 +82,29 @@ const serviceOptions = [
 
 const nusaDutaIndoorCourtUrl = "https://booking.stadiumjohor.my/product/tennis-pusat-kecemerlangan-sukan-johor-nusa-duta/";
 const nusaDutaOutdoorCourtUrl = "https://booking.stadiumjohor.my/product/tennis-outdoor-pusat-kecemerlangan-sukan-johor-nusa-duta/";
+const jalanDutaCourtUrl = "https://www.stadium.gov.my/sport-recreations/outdoor/tennis.html";
+const kualaLumpurStartDate = "2026-10-01";
+const trainingAreas = {
+  kl: {
+    id: "kl",
+    name: "Kuala Lumpur",
+    slug: "/kuala-lumpur",
+    primaryLocation: "Jalan Duta National Tennis Centre",
+  },
+  jb: {
+    id: "jb",
+    name: "Johor Bahru",
+    slug: "/johor-bahru",
+    primaryLocation: "Tennis Nusa Duta",
+  },
+};
 
 function getServiceById(serviceId) {
   return serviceOptions.find((service) => service.id === serviceId) || null;
 }
 
 function getCourtBookingUrl(location, courtOption) {
+  if (location === trainingAreas.kl.primaryLocation && courtOption) return jalanDutaCourtUrl;
   if (location !== "Tennis Nusa Duta") return "";
   if (courtOption === "Indoor") return nusaDutaIndoorCourtUrl;
   if (courtOption === "Outdoor") return nusaDutaOutdoorCourtUrl;
@@ -96,6 +113,7 @@ function getCourtBookingUrl(location, courtOption) {
 
 const groupCoachingCapacity = 6;
 const groupCoachingFeePerPlayer = 60;
+const customerBookingCutoffDate = "2026-09-18";
 
 function getGroupSeatLockId(coachId, date, seatNumber) {
   return `${String(coachId || "group-coaching").replace(/[^a-zA-Z0-9_-]/g, "_")}__${date}__group-seat-${seatNumber}`;
@@ -589,7 +607,7 @@ function getExpandedBookingSlots(bookings, range, bookingFilter) {
     if (range && (bookingDate < range.start || bookingDate >= range.end)) return;
 
     const dateString = formatDate(bookingDate);
-    const startIndex = allTimeSlots.indexOf(String(booking.time || "").trim());
+    const startIndex = allTimeSlots.indexOf(String(booking.startTime || booking.time || "").trim());
     if (startIndex === -1) return;
 
     const duration = getBookingSlotCount(booking);
@@ -778,8 +796,11 @@ function cleanTableValue(value) {
 }
 
 function normalizePhoneNumber(value) {
-  const digits = cleanTableValue(value).replace(/\D/g, "");
+  const rawValue = cleanTableValue(value);
+  const digits = rawValue.replace(/\D/g, "");
   if (!digits) return "";
+  if (rawValue.trim().startsWith("+")) return digits;
+  if (rawValue.trim().startsWith("00")) return digits.slice(2);
   if (digits.startsWith("60")) return digits;
   if (digits.startsWith("0")) return `60${digits.slice(1)}`;
   return `60${digits}`;
@@ -821,7 +842,7 @@ function getBundleWhatsAppMessage(bookings) {
     `Bundle: ${first.bundleReference || first.bundleId || "-"}`,
     `Sessions: ${sessions.length}`,
     "",
-    ...sessions.map((session, index) => `${index + 1}. ${session.date} · ${session.startTime || session.time} · ${session.durationHours || session.duration} hour(s) · ${session.location}${session.courtOption || session.court ? ` (${session.courtOption || session.court})` : ""}`),
+    ...sessions.map((session, index) => `${index + 1}. ${session.date} Â· ${session.startTime || session.time} Â· ${session.durationHours || session.duration} hour(s) Â· ${session.location}${session.courtOption || session.court ? ` (${session.courtOption || session.court})` : ""}`),
     "",
     "Please open the coach dashboard to review the request.",
   ].join("\n");
@@ -1450,7 +1471,7 @@ function PackageTracker({ packages, bookings, customers, canEdit, user, userProf
           <select value={newPackage.customerId} onChange={(e) => selectCustomer(e.target.value, setNewPackage)} className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2 md:col-span-4">
             <option value="">Auto-link by exact phone or name</option>
             {newPackage.customerId && !customers.some((customer) => customer.id === newPackage.customerId) && <option value={newPackage.customerId}>Linked customer from booking</option>}
-            {customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.fullName || customer.name || customer.email} · {customer.phone || customer.email}</option>)}
+            {customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.fullName || customer.name || customer.email} Â· {customer.phone || customer.email}</option>)}
           </select>
           <div className="relative md:col-span-2" onBlur={hideStudentSuggestionsSoon}>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -1946,7 +1967,7 @@ function TransferSessionModal({ booking, coaches, user, userProfile, onClose }) 
           <div>
             <h2 className="text-2xl font-semibold">Transfer Session</h2>
             <p className="mt-2 text-sm text-neutral-400">
-              {booking.name} · {booking.date} · {booking.time}
+              {booking.name} Â· {booking.date} Â· {booking.time}
             </p>
           </div>
           <button type="button" onClick={onClose} className="rounded-xl bg-neutral-800 px-3 py-2">Close</button>
@@ -1992,6 +2013,112 @@ function TransferSessionModal({ booking, coaches, user, userProfile, onClose }) 
   );
 }
 
+function getAreaFromPath(pathname) {
+  if (pathname === trainingAreas.kl.slug) return "kl";
+  if (pathname === trainingAreas.jb.slug) return "jb";
+  return "";
+}
+
+function requiresCourtOption(location) {
+  return location === trainingAreas.kl.primaryLocation || location === trainingAreas.jb.primaryLocation;
+}
+
+function isBeforeKualaLumpurStart(date) {
+  const dateString = date instanceof Date ? formatDate(date) : String(date || "").slice(0, 10);
+  return Boolean(dateString && dateString < kualaLumpurStartDate);
+}
+
+function getStoredTrainingArea() {
+  try {
+    const value = window.localStorage.getItem("coach-ilham-training-area");
+    return trainingAreas[value] ? value : "";
+  } catch {
+    return "";
+  }
+}
+
+function saveTrainingArea(area) {
+  try {
+    window.localStorage.setItem("coach-ilham-training-area", area);
+  } catch {
+    // Booking still works when storage is unavailable; the area remains in the URL.
+  }
+}
+
+function isAfterCustomerBookingCutoff(date) {
+  const dateString = date instanceof Date ? formatDate(date) : String(date || "").slice(0, 10);
+  return Boolean(dateString && dateString > customerBookingCutoffDate);
+}
+
+function CancelBookingModal({ booking, onClose, onConfirm }) {
+  const [reason, setReason] = useState("");
+  const [status, setStatus] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  if (!booking) return null;
+
+  async function confirmCancellation() {
+    const cancellationReason = reason.trim();
+    if (!cancellationReason) {
+      setStatus("Please enter a cancellation reason.");
+      return;
+    }
+
+    setSubmitting(true);
+    setStatus("Cancelling booking...");
+    try {
+      await onConfirm(booking, cancellationReason);
+      onClose();
+    } catch (error) {
+      console.error(error);
+      setStatus(error?.message || "Booking could not be cancelled.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="w-full max-w-lg rounded-3xl border border-neutral-800 bg-neutral-950 p-6 shadow-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-widest text-red-300">Cancellation required</p>
+            <h2 className="mt-2 text-2xl font-semibold">Cancel Booking</h2>
+            <p className="mt-2 text-sm text-neutral-400">{booking.name || booking.customerName} Â· {booking.date} Â· {booking.time}</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={submitting} className="rounded-xl bg-neutral-800 px-3 py-2 disabled:opacity-50">Close</button>
+        </div>
+
+        <div className="mt-5 rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-sm text-red-100">
+          The booking slot will be released after cancellation. This action requires a reason for the audit record.
+        </div>
+
+        <label className="mt-5 block text-sm font-semibold" htmlFor="cancellation-reason">Reason for cancellation</label>
+        <textarea
+          id="cancellation-reason"
+          autoFocus
+          rows="4"
+          value={reason}
+          onChange={(event) => {
+            setReason(event.target.value);
+            if (status === "Please enter a cancellation reason.") setStatus("");
+          }}
+          placeholder="Example: Customer requested cancellation, coach unavailable, or court unavailable"
+          className="mt-2 w-full rounded-2xl border border-neutral-700 bg-neutral-800 px-4 py-3 outline-none focus:border-red-400"
+        />
+
+        <div className="mt-5 grid grid-cols-2 gap-3">
+          <button type="button" onClick={onClose} disabled={submitting} className="rounded-2xl bg-neutral-800 px-5 py-3 font-semibold disabled:opacity-50">Keep Booking</button>
+          <button type="button" onClick={confirmCancellation} disabled={submitting || !reason.trim()} className="rounded-2xl bg-red-500 px-5 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">
+            {submitting ? "Cancelling..." : "Confirm Cancellation"}
+          </button>
+        </div>
+        {status && <p className="mt-3 text-sm text-neutral-300">{status}</p>}
+      </div>
+    </div>
+  );
+}
+
 function TransferLogs({ logs }) {
   return (
     <div className="mt-8 rounded-3xl border border-neutral-800 bg-neutral-900 p-6">
@@ -2000,7 +2127,7 @@ function TransferLogs({ logs }) {
         {logs.slice(0, 10).map((log) => (
           <div key={log.id} className="rounded-2xl bg-neutral-950 p-4 text-sm text-neutral-300">
             <div className="font-semibold text-white">
-              {log.date} {log.time} · {log.customerName || "Session"}
+              {log.date} {log.time} Â· {log.customerName || "Session"}
             </div>
             <div className="mt-2">
               Transferred by {log.transferredByName || "Super Admin"} from {log.fromCoachName || "-"} to {log.toCoachName || "-"}.
@@ -2189,6 +2316,180 @@ function PendingLeaveRequests({ requests, bookings, user }) {
   );
 }
 
+function StudentDirectoryExport({ bookings, packages, customers }) {
+  const [exportStatus, setExportStatus] = useState("");
+  const [whatsAppMessage, setWhatsAppMessage] = useState("Hi {name}, ini Coach Ilham. Saya ingin berkongsi maklumat terkini mengenai sesi tenis anda.");
+  const students = useMemo(() => {
+    const records = new Map();
+    const aliases = new Map();
+
+    function getRecordKey(record) {
+      const customerId = String(record.customerId || record.uid || "").trim();
+      const phone = normalizePhoneNumber(record.customerPhone || record.phone);
+      const name = normalizeStudentName(record.customerName || record.clientName || record.studentName || record.fullName || record.name);
+      return customerId ? `id:${customerId}` : phone ? `phone:${phone}` : name ? `name:${name}` : "";
+    }
+
+    function upsert(record, source) {
+      const primaryKey = getRecordKey(record);
+      if (!primaryKey) return null;
+      const customerId = String(record.customerId || record.uid || "").trim();
+      const phone = normalizePhoneNumber(record.customerPhone || record.phone);
+      const name = normalizeStudentName(record.customerName || record.clientName || record.studentName || record.fullName || record.name);
+      const aliasKeys = [customerId && `id:${customerId}`, phone && `phone:${phone}`, name && `name:${name}`].filter(Boolean);
+      const existingKey = aliasKeys.map((key) => aliases.get(key)).find(Boolean) || primaryKey;
+      const current = records.get(existingKey) || {
+        key: existingKey,
+        name: "",
+        phone: "",
+        email: "",
+        coaches: new Set(),
+        packages: new Set(),
+        bookingIds: new Set(),
+        bookingDates: [],
+        linkedAccount: false,
+      };
+
+      current.name = current.name || String(record.customerName || record.clientName || record.studentName || record.fullName || record.name || "").trim();
+      current.phone = current.phone || String(record.customerPhone || record.phone || "").trim();
+      current.email = current.email || String(record.customerEmail || record.email || "").trim();
+      current.linkedAccount = current.linkedAccount || Boolean(customerId || record.uid);
+      if (record.coachName || record.coachEmail) current.coaches.add(record.coachName || record.coachEmail);
+      if (source === "package") current.packages.add(record.packageLabel || record.packageType || "Coaching Package");
+      if (source === "booking") {
+        if (record.id) current.bookingIds.add(record.id);
+        if (record.date) current.bookingDates.push(record.date);
+      }
+
+      records.set(existingKey, current);
+      aliasKeys.forEach((key) => aliases.set(key, existingKey));
+      return current;
+    }
+
+    bookings.filter((booking) => !booking.isSlotLock && !isUnavailableBooking(booking)).forEach((booking) => upsert(booking, "booking"));
+    packages.forEach((packageRecord) => upsert(packageRecord, "package"));
+
+    records.forEach((student) => {
+      const linkedCustomer = findMatchingCustomer(customers, {
+        customerId: student.key.startsWith("id:") ? student.key.slice(3) : "",
+        customerName: student.name,
+        phone: student.phone,
+      });
+      if (!linkedCustomer) return;
+      student.name = linkedCustomer.fullName || linkedCustomer.name || student.name;
+      student.phone = linkedCustomer.phone || student.phone;
+      student.email = linkedCustomer.email || student.email;
+      student.linkedAccount = true;
+    });
+
+    return Array.from(records.values())
+      .map((student) => ({
+        name: student.name || "-",
+        phone: student.phone || "-",
+        email: student.email || "-",
+        coaches: Array.from(student.coaches).filter(Boolean).join(", ") || "-",
+        totalBookings: student.bookingIds.size,
+        lastBookingDate: [...student.bookingDates].sort().at(-1) || "-",
+        packages: Array.from(student.packages).filter(Boolean).join(", ") || "-",
+        linkedAccount: student.linkedAccount ? "Yes" : "No",
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [bookings, customers, packages]);
+
+  const exportRows = useMemo(() => {
+    function getPersonalMessage(student) {
+      return whatsAppMessage.replaceAll("{name}", student.name === "-" ? "there" : student.name);
+    }
+
+    function getWhatsAppFormula(student, message) {
+      const phone = normalizePhoneNumber(student.phone);
+      if (!phone) return "";
+      const url = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+      const label = `WhatsApp ${student.name === "-" ? "Student" : student.name}`.replaceAll('"', '""');
+      return `=HYPERLINK("${url}","${label}")`;
+    }
+
+    return [
+      ["Student Name", "Phone Number", "WhatsApp Message", "WhatsApp Link", "Email", "Coach", "Total Bookings", "Last Booking Date", "Package", "Linked Customer Account"],
+      ...students.map((student) => {
+        const message = getPersonalMessage(student);
+        const normalizedPhone = normalizePhoneNumber(student.phone);
+        return [
+          student.name,
+          normalizedPhone ? `+${normalizedPhone}` : "-",
+          message,
+          getWhatsAppFormula(student, message),
+          student.email,
+          student.coaches,
+          student.totalBookings,
+          student.lastBookingDate,
+          student.packages,
+          student.linkedAccount,
+        ];
+      }),
+    ];
+  }, [students, whatsAppMessage]);
+
+  function escapeCsvCell(value) {
+    const text = String(value ?? "");
+    return `"${text.replaceAll('"', '""')}"`;
+  }
+
+  function downloadCsv() {
+    const csv = exportRows.map((row) => row.map(escapeCsvCell).join(",")).join("\r\n");
+    const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `student-directory-${formatDate(new Date())}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    setExportStatus(`${students.length} student records exported.`);
+  }
+
+  async function copyForGoogleSheets() {
+    try {
+      const sanitizeSheetCell = (value) => String(value ?? "")
+        .replace(/\r?\n+/g, " Â· ")
+        .replaceAll("\t", " ")
+        .replace(/\s*Â·\s*Â·\s*/g, " Â· ")
+        .trim();
+      const tabSeparated = exportRows.map((row) => row.map(sanitizeSheetCell).join("\t")).join("\n");
+      await navigator.clipboard.writeText(tabSeparated);
+      setExportStatus("Copied in Google Sheets format. Select cell A1 and paste; each student will stay on one row.");
+    } catch (error) {
+      console.error(error);
+      setExportStatus("Could not access the clipboard. Please use Download CSV.");
+    }
+  }
+
+  return (
+    <section className="premium-student-export mt-8">
+      <div className="premium-student-export-copy">
+        <span className="premium-student-export-icon"><Users size={22} /></span>
+        <div>
+          <p>Student Directory</p>
+          <h2>Export student contact information</h2>
+          <span>{students.length} student{students.length === 1 ? "" : "s"} found from the selected coachâ€™s bookings and packages.</span>
+        </div>
+      </div>
+      <div className="premium-student-export-actions">
+        <button type="button" onClick={downloadCsv} disabled={students.length === 0}><Download size={17} /> Download CSV</button>
+        <button type="button" onClick={copyForGoogleSheets} disabled={students.length === 0}><ClipboardCopy size={17} /> Copy for Google Sheets</button>
+        <a href="https://sheets.new" target="_blank" rel="noreferrer"><ExternalLink size={17} /> Open Google Sheets</a>
+      </div>
+      <label className="premium-student-export-message">
+        <span>WhatsApp message included in the export</span>
+        <textarea rows="3" value={whatsAppMessage} onChange={(event) => setWhatsAppMessage(event.target.value)} placeholder="Write the WhatsApp message here..." />
+        <small>Use <code>{"{name}"}</code> to insert each studentâ€™s name automatically.</small>
+      </label>
+      {exportStatus && <p className="premium-student-export-status">{exportStatus}</p>}
+    </section>
+  );
+}
+
 function AdminDashboard({ bookings, packages, customers, notifications, coaches, transferLogs, users, leaveRequests, onRefresh, user, userProfile, authLoading }) {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -2211,6 +2512,7 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
   const [editingPhoneValue, setEditingPhoneValue] = useState("");
   const [phoneEditStatus, setPhoneEditStatus] = useState("");
   const [transferBooking, setTransferBooking] = useState(null);
+  const [cancellingBooking, setCancellingBooking] = useState(null);
   const [adminWeekDate, setAdminWeekDate] = useState(formatDate(new Date()));
   const rowsPerPage = 10;
   const userRole = getUserRole(userProfile);
@@ -2537,7 +2839,7 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
     }
   }
 
-  async function cancelBookingAndReleaseLocks(booking) {
+  async function cancelBookingAndReleaseLocks(booking, cancellationReason = "Removed from admin schedule") {
     const lockSnapshot = await getDocs(
       query(collection(db, "availabilityLocks"), where("bookingId", "==", booking.id))
     );
@@ -2548,20 +2850,62 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
       bookingStatus: "Cancelled",
       cancelledAt: serverTimestamp(),
       cancelledBy: user?.uid || "",
+      cancelledByName: getCoachName(user, userProfile),
+      cancelledByEmail: user?.email || "",
+      cancelledByRole: userRole,
+      cancellationReason: String(cancellationReason || "").trim(),
       updatedAt: serverTimestamp(),
     });
     lockSnapshot.docs.forEach((lockDoc) => batch.delete(lockDoc.ref));
     await batch.commit();
   }
 
-  async function cancelAdminBooking(booking) {
-    if (!isSuperAdmin) return;
+  async function upsertBookingAvailabilityLocks(bookingId, bookingData) {
+    const coachId = bookingData.coachId || bookingData.createdBy || "";
+    const slots = getRequestedSlotKeys(
+      bookingData.date,
+      bookingData.startTime || bookingData.time,
+      bookingData.durationHours || bookingData.duration || 1
+    );
+
+    if (!bookingId || !coachId || !bookingData.date || slots.length === 0) return;
+
+    const existingLocks = await getDocs(query(collection(db, "availabilityLocks"), where("bookingId", "==", bookingId)));
+    const batch = writeBatch(db);
+    existingLocks.docs.forEach((lockDoc) => batch.delete(lockDoc.ref));
+
+    const status = isUnavailableBooking(bookingData)
+      ? "blocked"
+      : getNormalizedBookingStatus(bookingData) || "confirmed";
+
+    slots.forEach((slot) => {
+      batch.set(doc(db, "availabilityLocks", getSlotLockId(coachId, bookingData.date, slot)), {
+        bookingId,
+        customerId: bookingData.customerId || "",
+        customerName: bookingData.customerName || bookingData.name || "",
+        coachId,
+        date: bookingData.date,
+        time: getAvailabilityLockTime({ date: bookingData.date, time: slot }),
+        duration: 1,
+        status,
+        confirmationExpiresAt: null,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+    });
+
+    await batch.commit();
+  }
+
+  async function cancelAdminBooking(booking, cancellationReason) {
+    if (!isSuperAdmin) throw new Error("Only Super Admin can cancel this booking.");
+    if (!String(cancellationReason || "").trim()) throw new Error("A cancellation reason is required.");
     try {
-      await cancelBookingAndReleaseLocks(booking);
-      setPhoneEditStatus("Booking cancelled and its slot is available again.");
+      await cancelBookingAndReleaseLocks(booking, cancellationReason);
+      setPhoneEditStatus(`Booking cancelled. Reason: ${String(cancellationReason).trim()}`);
     } catch (error) {
       console.error(error);
       setPhoneEditStatus("Booking could not be cancelled.");
+      throw error;
     }
   }
 
@@ -2629,13 +2973,15 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
 
     if (booking?.id) {
       await updateDoc(doc(db, "bookings", booking.id), scheduleData);
+      await upsertBookingAvailabilityLocks(booking.id, { ...booking, ...scheduleData });
       return;
     }
 
-    await addDoc(collection(db, "bookings"), {
+    const scheduleRef = await addDoc(collection(db, "bookings"), {
       ...scheduleData,
       createdAt: serverTimestamp(),
     });
+    await upsertBookingAvailabilityLocks(scheduleRef.id, scheduleData);
   }
 
   async function submitManualBlock() {
@@ -2673,7 +3019,7 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
           if (!selectedTime) continue;
           if (hasBookingOverlap(visibleBookings, currentDate, selectedTime, 1)) continue;
 
-          await addDoc(collection(db, "bookings"), {
+          const blockData = {
             name: "Blocked",
             phone: "",
             date: currentDate,
@@ -2693,7 +3039,9 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
             role: userRole,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
-          });
+          };
+          const blockRef = await addDoc(collection(db, "bookings"), blockData);
+          await upsertBookingAvailabilityLocks(blockRef.id, blockData);
         }
       }
 
@@ -2891,7 +3239,7 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
           <div>
             <h1 className="premium-page-title text-4xl font-bold">Admin Dashboard</h1>
             <p className="mt-2 text-neutral-400">
-              {getCoachName(user, userProfile)} · {userRole}
+              {getCoachName(user, userProfile)} Â· {userRole}
             </p>
           </div>
 
@@ -2973,6 +3321,8 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
             </div>
           ))}
         </div>
+
+        <StudentDirectoryExport bookings={visibleBookings} packages={visiblePackages} customers={customers} />
 
         {isSuperAdmin && <PendingCoachApprovals users={users} user={user} />}
         {isSuperAdmin && <PendingLeaveRequests requests={leaveRequests} bookings={bookings} user={user} />}
@@ -3097,7 +3447,7 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
             }}
             className="rounded-2xl bg-neutral-800 px-5 py-3"
           >
-            ← Previous Week
+            â† Previous Week
           </button>
 
           <button
@@ -3108,7 +3458,7 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
             }}
             className="rounded-2xl bg-neutral-800 px-5 py-3"
           >
-            Next Week →
+            Next Week â†’
           </button>
         </div>
 
@@ -3210,7 +3560,7 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
                         {booking.status === "pending_confirmation" && <button type="button" onClick={() => manuallyConfirmBooking(booking)} className="rounded-xl bg-lime-400 px-3 py-2 text-xs font-semibold text-black">Confirm Manually</button>}
                         {booking.status === "confirmed" && <button type="button" onClick={() => sendConfirmationEmail(booking)} className="rounded-xl bg-neutral-800 px-3 py-2 text-xs">Resend Email</button>}
                         {booking.status === "confirmed" && <button type="button" onClick={() => downloadBookingPdf(booking)} className="rounded-xl bg-neutral-800 px-3 py-2 text-xs">Regenerate PDF</button>}
-                        {!['cancelled', 'expired'].includes(String(booking.status || booking.bookingStatus).toLowerCase()) && <button type="button" onClick={() => cancelAdminBooking(booking)} className="rounded-xl bg-red-500/20 px-3 py-2 text-xs text-red-200">Cancel Booking</button>}
+                        {!['cancelled', 'expired'].includes(String(booking.status || booking.bookingStatus).toLowerCase()) && <button type="button" onClick={() => setCancellingBooking(booking)} className="rounded-xl bg-red-500/20 px-3 py-2 text-xs text-red-200">Cancel Booking</button>}
                       </div>
                     ) : (
                       <span className="text-neutral-500">-</span>
@@ -3246,7 +3596,7 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
 
 
         <a href="/" className="inline-block mt-6 text-lime-400">
-          ← Back to booking page
+          â† Back to booking page
         </a>
 
       </div>
@@ -3259,17 +3609,116 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
           onClose={() => setTransferBooking(null)}
         />
       )}
+      {isSuperAdmin && cancellingBooking && (
+        <CancelBookingModal
+          booking={cancellingBooking}
+          onClose={() => setCancellingBooking(null)}
+          onConfirm={cancelAdminBooking}
+        />
+      )}
     </div>
   );
 }
 
-function HomePage() {
+function AreaSelectionModal({ onSelect }) {
+  return (
+    <div className="premium-area-overlay" role="dialog" aria-modal="true" aria-labelledby="area-picker-title">
+      <div className="premium-area-modal">
+        <p>Coach Ilham Academy</p>
+        <h2 id="area-picker-title">Where would you like to train?</h2>
+        <span>Select your area to see the correct coaches, venues and available sessions.</span>
+        <div className="premium-area-options">
+          <button type="button" onClick={() => onSelect("kl")}>
+            <small>From 1 October 2026</small>
+            <strong>Kuala Lumpur</strong>
+            <span>Train with Coach Ilham at Jalan Duta or your preferred court.</span>
+            <b>Choose Kuala Lumpur â†’</b>
+          </button>
+          <button type="button" onClick={() => onSelect("jb")}>
+            <small>Available now</small>
+            <strong>Johor Bahru</strong>
+            <span>Book with the Coach Ilham Academy coaching team in Johor Bahru.</span>
+            <b>Choose Johor Bahru â†’</b>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HomePage({ area = "" }) {
+  const [showAreaPicker, setShowAreaPicker] = useState(!area);
+  const activeArea = trainingAreas[area] || null;
+  const isKualaLumpur = area === "kl";
   const whatsappUrl = `https://wa.me/601137507963?text=${encodeURIComponent("Hi Coach Ilham, I would like to enquire about tennis coaching and book a session.")}`;
+  const bookingUrl = `/booking${area ? `?area=${area}` : ""}`;
+  const areaName = activeArea?.name || "Kuala Lumpur or Johor Bahru";
+  const heroTitle = isKualaLumpur ? "Private Tennis Coach in Kuala Lumpur" : area === "jb" ? "Tennis Coaching in Johor Bahru" : "Professional Tennis Coaching in Malaysia";
+  const heroDescription = isKualaLumpur
+    ? "Book private tennis lessons in Kuala Lumpur with Coach Ilham for kids and adults, from complete beginners to experienced players who want focused, personalised training."
+    : area === "jb"
+      ? "Book tennis lessons in Johor Bahru with the Coach Ilham Academy coaching team for kids, adults, private sessions and structured group coaching."
+      : "Choose Kuala Lumpur or Johor Bahru to view local coaches, venues and real-time tennis coaching availability.";
+
+  useEffect(() => {
+    const title = isKualaLumpur
+      ? "Tennis Coach Kuala Lumpur | Private Tennis Lessons | Coach Ilham"
+      : area === "jb"
+        ? "Tennis Coach Johor Bahru | Tennis Lessons | Coach Ilham Academy"
+        : "Coach Ilham Academy | Tennis Coaching Kuala Lumpur & Johor Bahru";
+    const description = isKualaLumpur
+      ? "Book a certified tennis coach in Kuala Lumpur. Private tennis lessons for kids and adults at Jalan Duta or your preferred KL court from 1 October 2026."
+      : area === "jb"
+        ? "Book tennis coaching in Johor Bahru for kids and adults with real-time coach availability at Nusa Duta and selected JB courts."
+        : "Private and group tennis coaching in Kuala Lumpur and Johor Bahru for kids and adults. Choose your area and book online.";
+    const canonicalPath = activeArea?.slug || "/";
+    document.title = title;
+    let metaDescription = document.querySelector('meta[name="description"]');
+    if (!metaDescription) {
+      metaDescription = document.createElement("meta");
+      metaDescription.setAttribute("name", "description");
+      document.head.appendChild(metaDescription);
+    }
+    metaDescription.setAttribute("content", description);
+    let canonical = document.querySelector('link[rel="canonical"]');
+    if (!canonical) {
+      canonical = document.createElement("link");
+      canonical.setAttribute("rel", "canonical");
+      document.head.appendChild(canonical);
+    }
+    canonical.setAttribute("href", `https://ilhamacademy.pages.dev${canonicalPath}`);
+    let structuredData = document.getElementById("coach-ilham-location-schema");
+    if (!structuredData) {
+      structuredData = document.createElement("script");
+      structuredData.id = "coach-ilham-location-schema";
+      structuredData.setAttribute("type", "application/ld+json");
+      document.head.appendChild(structuredData);
+    }
+    structuredData.textContent = JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "SportsActivityLocation",
+      name: isKualaLumpur ? "Coach Ilham Academy Kuala Lumpur" : area === "jb" ? "Coach Ilham Academy Johor Bahru" : "Coach Ilham Academy",
+      url: `https://ilhamacademy.pages.dev${canonicalPath}`,
+      telephone: "+601137507963",
+      sport: "Tennis",
+      areaServed: areaName,
+      address: activeArea ? { "@type": "PostalAddress", streetAddress: isKualaLumpur ? "Jalan Duta National Tennis Centre" : "Nusa Duta Tennis Complex", addressLocality: activeArea.name, addressCountry: "MY" } : undefined,
+    });
+  }, [activeArea, area, areaName, isKualaLumpur]);
+
+  function selectArea(nextArea) {
+    saveTrainingArea(nextArea);
+    window.location.assign(trainingAreas[nextArea].slug);
+  }
 
   return (
     <div className="premium-home min-h-screen w-full max-w-full overflow-x-hidden bg-neutral-950 text-white">
+      {showAreaPicker && <AreaSelectionModal onSelect={selectArea} />}
       <div className="premium-home-shell w-full max-w-6xl mx-auto px-4 py-8 sm:px-5 sm:py-12">
-        <div className="premium-topbar flex justify-end mb-6">
+        <div className="premium-topbar flex justify-between mb-6">
+          <button type="button" onClick={() => setShowAreaPicker(true)} className="premium-area-change">
+            {activeArea ? `${activeArea.name} Â· Change area` : "Choose training area"}
+          </button>
           <a
             href="/admin"
             className="rounded-full border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-lime-400 hover:text-lime-300 transition"
@@ -3285,19 +3734,19 @@ function HomePage() {
             </p>
 
             <h1 className="premium-display mt-6 text-4xl md:text-6xl font-bold">
-              Private Tennis Coach in Johor Bahru
+              {heroTitle}
             </h1>
 
             <p className="premium-lead mt-5 text-neutral-300 text-lg">
-              Coach Ilham Academy offers Tennis Lessons Johor Bahru for kids and adults, with private tennis coaching built around your level, your pace, and your goals.
+              {heroDescription}
             </p>
 
             <p className="premium-location mt-3 text-neutral-400">
-              Tennis Coach Johor Bahru based at Nusa Duta Tennis Complex.
+              {isKualaLumpur ? "Available from 1 October 2026 at Jalan Duta National Tennis Centre or your preferred Kuala Lumpur court." : area === "jb" ? "Coaching sessions in Johor Bahru with the Coach Ilham Academy team." : "Choose your city to view local availability."}
             </p>
 
             <div className="premium-hero-actions">
-              <a href="/booking" className="premium-primary-cta">Book Now <span aria-hidden="true">→</span></a>
+              <a href={bookingUrl} className="premium-primary-cta">Book in {areaName} <span aria-hidden="true">&rarr;</span></a>
               <a href={whatsappUrl} target="_blank" rel="noreferrer" className="premium-whatsapp-cta"><MessageCircle size={18} /> Chat on WhatsApp</a>
             </div>
           </div>
@@ -3315,9 +3764,9 @@ function HomePage() {
           <article className="premium-coach-preview">
             <div className="premium-guide-label">Choose your coach</div>
             <div className="premium-coach-preview-card">
-              <img src={coachImage} alt="" />
-              <div><strong>Coach Ilham</strong><span>ITF Level 1 · Sport Science Level 1</span><small>Experienced · Supportive · Results-driven</small></div>
-              <span aria-hidden="true">⌄</span>
+              {isKualaLumpur ? <img src={coachImage} alt="Coach Ilham" /> : <div className="premium-coach-avatar" aria-hidden="true">CA</div>}
+              <div><strong>{isKualaLumpur ? "Coach Ilham" : "Johor Bahru Coaching Team"}</strong><span>{isKualaLumpur ? "ITF Level 1 Â· Sport Science Level 1" : "Choose from available academy coaches"}</span><small>Experienced Â· Supportive Â· Results-driven</small></div>
+              <span aria-hidden="true">âŒ„</span>
             </div>
           </article>
           <article className="premium-how-it-works">
@@ -3335,7 +3784,7 @@ function HomePage() {
           {serviceOptions.map((service, index) => (
             <a
               key={service.id}
-              href={`/booking?service=${service.id}`}
+              href={`/booking?service=${service.id}${area ? `&area=${area}` : ""}`}
               className="premium-service-card rounded-3xl border border-neutral-800 bg-neutral-900 p-5 transition hover:border-lime-400/70 hover:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-lime-400"
             >
               <span className="premium-service-index">0{index + 1}</span>
@@ -3344,6 +3793,18 @@ function HomePage() {
             </a>
           ))}
         </section>
+
+        {isKualaLumpur && (
+          <section className="premium-location-seo" aria-labelledby="kl-tennis-coach-heading">
+            <p>Tennis coaching in Kuala Lumpur</p>
+            <h2 id="kl-tennis-coach-heading">Private Tennis Lessons in Kuala Lumpur with Coach Ilham</h2>
+            <div>
+              <p>Looking for a tennis coach in Kuala Lumpur? Coach Ilham provides personalised lessons for kids, adults and beginners, with training shaped around your level, goals and pace.</p>
+              <p>Sessions begin from 1 October 2026 at Jalan Duta National Tennis Centre or at a suitable Kuala Lumpur court preferred by the client.</p>
+            </div>
+            <a href={bookingUrl}>View Kuala Lumpur availability <span aria-hidden="true">&rarr;</span></a>
+          </section>
+        )}
 
         <section className="premium-trust-strip">
           <div><strong>All ages & levels</strong><span>Kids, adults and beginners</span></div>
@@ -3482,6 +3943,7 @@ function BookingDetails({ booking }) {
     ["Estimated Coaching Fee", `RM${booking.coachingFee ?? 0}`],
     ["Booking Status", String(booking.status || booking.bookingStatus || "").replaceAll("_", " ")],
   ];
+  if (booking.cancellationReason) rows.push(["Cancellation Reason", booking.cancellationReason]);
   return <dl className="divide-y divide-neutral-800">{rows.map(([label, value]) => <div key={label} className="grid gap-1 py-3 sm:grid-cols-2"><dt className="text-neutral-400">{label}</dt><dd className="font-medium capitalize">{value || "-"}</dd></div>)}</dl>;
 }
 
@@ -3551,7 +4013,7 @@ function CustomerPackageSummary({ packages, bookings }) {
     const usage = getPackageUsage(bookings, packageRecord);
     const total = Number(packageRecord.totalPackageSessions || packageRecord.totalSessions || 0);
     const updatedAt = packageRecord.updatedAt?.toDate?.();
-    return <article key={packageRecord.id} className="rounded-2xl border border-lime-400/30 bg-lime-400/5 p-5"><div className="flex items-start justify-between gap-3"><div><p className="text-sm capitalize text-lime-300">{packageRecord.status || "active"}</p><h3 className="mt-1 text-lg font-semibold">{packageRecord.packageLabel || packageRecord.packageType || "Coaching Package"}</h3></div><span className="rounded-full bg-lime-400 px-3 py-1 text-sm font-semibold text-black">{usage.remainingSessions} left</span></div><div className="mt-4 h-2 overflow-hidden rounded-full bg-neutral-800"><div className="h-full bg-lime-400" style={{ width: `${total > 0 ? Math.min(100, (usage.usedSessions / total) * 100) : 0}%` }} /></div><p className="mt-2 text-sm text-neutral-300">Used {usage.usedSessions} of {total} sessions</p><p className="mt-1 text-sm text-neutral-400">Payment: {packageRecord.paymentStatus || "Unpaid"}{packageRecord.paymentAmount ? ` · RM${packageRecord.paymentAmount}` : ""}</p>{packageRecord.notes && <p className="mt-3 rounded-xl bg-neutral-950 p-3 text-sm text-neutral-300">Coach note: {packageRecord.notes}</p>}<p className="mt-3 text-xs text-lime-300">{packageRecord.updateMessage || "Your coach updated this package."}</p><p className="mt-1 text-xs text-neutral-500">Updated by {packageRecord.updatedByName || packageRecord.coachName || "Coach"}{updatedAt ? ` · ${updatedAt.toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" })}` : ""}</p></article>;
+    return <article key={packageRecord.id} className="rounded-2xl border border-lime-400/30 bg-lime-400/5 p-5"><div className="flex items-start justify-between gap-3"><div><p className="text-sm capitalize text-lime-300">{packageRecord.status || "active"}</p><h3 className="mt-1 text-lg font-semibold">{packageRecord.packageLabel || packageRecord.packageType || "Coaching Package"}</h3></div><span className="rounded-full bg-lime-400 px-3 py-1 text-sm font-semibold text-black">{usage.remainingSessions} left</span></div><div className="mt-4 h-2 overflow-hidden rounded-full bg-neutral-800"><div className="h-full bg-lime-400" style={{ width: `${total > 0 ? Math.min(100, (usage.usedSessions / total) * 100) : 0}%` }} /></div><p className="mt-2 text-sm text-neutral-300">Used {usage.usedSessions} of {total} sessions</p><p className="mt-1 text-sm text-neutral-400">Payment: {packageRecord.paymentStatus || "Unpaid"}{packageRecord.paymentAmount ? ` Â· RM${packageRecord.paymentAmount}` : ""}</p>{packageRecord.notes && <p className="mt-3 rounded-xl bg-neutral-950 p-3 text-sm text-neutral-300">Coach note: {packageRecord.notes}</p>}<p className="mt-3 text-xs text-lime-300">{packageRecord.updateMessage || "Your coach updated this package."}</p><p className="mt-1 text-xs text-neutral-500">Updated by {packageRecord.updatedByName || packageRecord.coachName || "Coach"}{updatedAt ? ` Â· ${updatedAt.toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" })}` : ""}</p></article>;
   })}</div></section>;
 }
 
@@ -3579,7 +4041,7 @@ function MyBookingsPage({ bookings, packages, user, profile }) {
                   <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs capitalize text-neutral-400">{booking.status.replaceAll("_", " ")}</span>
                 </div>
                 <h3 className="mt-1 font-semibold">{booking.coachName}</h3>
-                <p className="mt-1 text-sm text-neutral-300">{booking.date} · {booking.time} · {booking.duration} hour(s)</p>
+                <p className="mt-1 text-sm text-neutral-300">{booking.date} Â· {booking.time} Â· {booking.duration} hour(s)</p>
                 <p className="text-sm text-neutral-500">{booking.location}</p>
               </div>
               <div className="flex shrink-0 flex-wrap gap-2 text-sm sm:justify-end">
@@ -3615,6 +4077,7 @@ function ProfilePage({ user, profile }) {
 }
 
 function BookingPage({
+  selectedArea,
   selectedService,
   coachingFormat,
   setCoachingFormat,
@@ -3655,15 +4118,17 @@ function BookingPage({
   getDateStatus,
   selectedCoachBookings,
   groupParticipants,
+  bookingCutoffApplies,
 }) {
   const courtBookingUrl = getCourtBookingUrl(location, courtOption);
   const isFixedGroupCoaching = selectedService?.id === "group" || (selectedService?.id === "kids" && coachingFormat === "group");
+  const areaDetails = trainingAreas[selectedArea] || trainingAreas.jb;
 
   return (
     <div className="premium-app-page premium-booking-page min-h-screen w-full max-w-full overflow-x-hidden bg-neutral-950 text-white">
       <div className="premium-booking-shell w-full max-w-6xl mx-auto px-4 py-8 sm:px-5 sm:py-12">
         <div className="premium-page-nav mb-6 flex items-center justify-between gap-3">
-          <a href="/" className="rounded-full border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-lime-400 hover:text-lime-300 transition">
+          <a href={areaDetails.slug} className="rounded-full border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-lime-400 hover:text-lime-300 transition">
             Back
           </a>
           <div className="flex items-center gap-3"><a href="/my-bookings" className="text-sm text-neutral-300 hover:text-lime-300">My Bookings</a><button type="button" onClick={() => signOut(auth)} className="rounded-full border border-neutral-700 px-4 py-2 text-sm">Sign Out</button></div>
@@ -3671,7 +4136,7 @@ function BookingPage({
 
         <div className="premium-booking-heading mb-8">
           <p className="inline-block rounded-full border border-lime-400/40 px-4 py-2 text-sm text-lime-300">
-            Coach Ilham Academy
+            Coach Ilham Academy Â· {areaDetails.name}
           </p>
           <h1 className="mt-5 text-3xl font-bold">Book Your Tennis Session</h1>
           <p className="mt-3 rounded-2xl bg-neutral-900 border border-neutral-800 px-4 py-3 text-sm text-neutral-200">
@@ -3702,8 +4167,8 @@ function BookingPage({
               )}
               {isFixedGroupCoaching && (
                 <div className="premium-fixed-session-note">
-                  <strong>Group Coaching · Every Tuesday</strong>
-                  <span>8:00 PM–10:00 PM · RM60 per player · Maximum 6 players.</span>
+                  <strong>Group Coaching Â· Every Tuesday</strong>
+                  <span>8:00 PMâ€“10:00 PM Â· RM60 per player Â· Maximum 6 players.</span>
                 </div>
               )}
               {!isFixedGroupCoaching && (
@@ -3721,12 +4186,14 @@ function BookingPage({
                   ))}
                 </select>
               )}
-              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
+              <input type="date" min={selectedArea === "kl" ? kualaLumpurStartDate : undefined} max={bookingCutoffApplies ? customerBookingCutoffDate : undefined} value={date} onChange={(e) => setDate(e.target.value)} className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />
+              {selectedArea === "kl" && <p className="premium-booking-cutoff-note">Kuala Lumpur sessions begin from 1 October 2026.</p>}
+              {bookingCutoffApplies && <p className="premium-booking-cutoff-note">Coach Ilham bookings are available up to 18 September 2026.</p>}
 
               {!isFixedGroupCoaching && <div className="premium-time-picker">
                 <div className="premium-time-picker-head">
-                  <span aria-hidden="true">◷</span>
-                  <span>{selectedCoachId ? `Available times · ${parseBookingDate(date).toLocaleDateString("en-MY", { day: "numeric", month: "short" })}` : "Choose a coach to view available times"}</span>
+                  <span aria-hidden="true">â—·</span>
+                  <span>{selectedCoachId ? `Available times Â· ${parseBookingDate(date).toLocaleDateString("en-MY", { day: "numeric", month: "short" })}` : "Choose a coach to view available times"}</span>
                 </div>
                 {selectedCoachId && availableSlots.length > 0 ? (
                   <div className="premium-time-grid">
@@ -3763,8 +4230,8 @@ function BookingPage({
                     {bundleSessions.map((session, index) => (
                       <article key={session.clientId}>
                         <span>{String(index + 1).padStart(2, "0")}</span>
-                        <div><strong>{session.date} · {session.time}</strong><small>{session.durationHours} hour(s) · {session.location}{session.courtOption ? ` · ${session.courtOption}` : ""}</small></div>
-                        <button type="button" onClick={() => removeBundleSession(session.clientId)} aria-label={`Remove ${session.date} ${session.time}`}>×</button>
+                        <div><strong>{session.date} Â· {session.time}</strong><small>{session.durationHours} hour(s) Â· {session.location}{session.courtOption ? ` Â· ${session.courtOption}` : ""}</small></div>
+                        <button type="button" onClick={() => removeBundleSession(session.clientId)} aria-label={`Remove ${session.date} ${session.time}`}>Ã—</button>
                       </article>
                     ))}
                   </div>
@@ -3782,15 +4249,15 @@ function BookingPage({
                 value={location}
                 onChange={(e) => {
                   setLocation(e.target.value);
-                  if (e.target.value !== "Tennis Nusa Duta") setCourtOption("");
+                  if (!requiresCourtOption(e.target.value)) setCourtOption("");
                 }}
                 className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400"
               >
-                <option>Tennis Nusa Duta</option>
+                <option>{areaDetails.primaryLocation}</option>
                 <option>Client Preferred Location</option>
               </select>}
 
-              {!isFixedGroupCoaching && location === "Tennis Nusa Duta" && (
+              {!isFixedGroupCoaching && requiresCourtOption(location) && (
                 <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-4">
                   <label className="text-sm font-semibold text-neutral-200">Court Option</label>
                   <select
@@ -3814,7 +4281,7 @@ function BookingPage({
                       </span>
                       <span>
                         <strong>Check &amp; Book {courtOption} Court</strong>
-                        <small>Court reservation opens on the Stadium Johor website</small>
+                        <small>Court reservation opens on the official venue website</small>
                       </span>
                       <span className="premium-court-booking-arrow" aria-hidden="true">&rarr;</span>
                     </a>
@@ -3871,7 +4338,7 @@ function BookingPage({
               {!isFixedGroupCoaching && <textarea rows="4" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Notes" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />}
 
               <button onClick={bundleSessions.length > 0 ? submitBundleBooking : submitBooking} disabled={loading || (isFixedGroupCoaching ? groupParticipants.length >= groupCoachingCapacity || availableSlots.length === 0 : (!bundleSessions.length && (!selectedCoachId || availableSlots.length === 0)))} className="w-full bg-white text-black rounded-2xl py-4 font-semibold hover:bg-neutral-200 transition disabled:opacity-50">
-                {loading ? "Please wait..." : isFixedGroupCoaching ? groupParticipants.length >= groupCoachingCapacity ? "Group Full" : "Register for Group Coaching · RM60" : bundleSessions.length > 0 ? `Reserve Bundle (${bundleSessions.length})` : "Book Now"}
+                {loading ? "Please wait..." : isFixedGroupCoaching ? groupParticipants.length >= groupCoachingCapacity ? "Group Full" : "Register for Group Coaching Â· RM60" : bundleSessions.length > 0 ? `Reserve Bundle (${bundleSessions.length})` : "Book Now"}
               </button>
 
               {status && <p className="text-sm text-neutral-300">{status}</p>}
@@ -3900,13 +4367,15 @@ function BookingPage({
                   today.setHours(0, 0, 0, 0);
                   const isPast = day && day < today;
                   const isUnavailableGroupDay = Boolean(day && isFixedGroupCoaching && day.getDay() !== 2);
+                  const isAfterCutoff = Boolean(day && bookingCutoffApplies && isAfterCustomerBookingCutoff(day));
+                  const isBeforeAreaStart = Boolean(day && selectedArea === "kl" && isBeforeKualaLumpurStart(day));
 
                   return (
                     <button
                       key={index}
-                      disabled={!day || isPast || isUnavailableGroupDay}
+                      disabled={!day || isPast || isUnavailableGroupDay || isAfterCutoff || isBeforeAreaStart}
                       onClick={() => day && setDate(dayString)}
-                      className={`min-h-20 rounded-2xl border p-2 text-left transition ${isPast || isUnavailableGroupDay
+                      className={`min-h-20 rounded-2xl border p-2 text-left transition ${isPast || isUnavailableGroupDay || isAfterCutoff || isBeforeAreaStart
                         ? "opacity-30 cursor-not-allowed border-neutral-900 bg-neutral-950"
                         : isSelected
                           ? "border-lime-400 bg-lime-400 text-black"
@@ -3939,12 +4408,9 @@ function BookingPage({
             />
 
             <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8">
-              <h2 className="text-2xl font-semibold mb-5">Nusa Duta Tennis Complex</h2>
-              <div className="grid sm:grid-cols-2 gap-4 text-neutral-300">
-                <div className="rounded-2xl bg-neutral-800 p-4"><div className="font-semibold text-white">Day Session</div><div>8AM - 7PM</div><div>Outdoor RM10/hour</div><div>Indoor RM15/hour</div></div>
-                <div className="rounded-2xl bg-neutral-800 p-4"><div className="font-semibold text-white">Night Session</div><div>7PM - 12AM</div><div>Outdoor RM20/hour</div><div>Indoor RM30/hour</div></div>
-              </div>
-              <a href="https://booking.stadiumjohor.my/product-tag/tennis/" target="_blank" className="inline-block mt-6 text-lime-400 hover:text-lime-300">Book Court at Stadium Johor &rarr;</a>
+              <h2 className="text-2xl font-semibold mb-3">{areaDetails.primaryLocation}</h2>
+              <p className="text-neutral-300">Coordinate the court booking with your selected coaching time before confirming the session. You may also choose Client Preferred Location.</p>
+              <a href={selectedArea === "kl" ? jalanDutaCourtUrl : "https://booking.stadiumjohor.my/product-tag/tennis/"} target="_blank" rel="noreferrer" className="inline-block mt-6 text-lime-400 hover:text-lime-300">Check official court availability &rarr;</a>
             </div>
           </div>
         </div>
@@ -3956,6 +4422,11 @@ function BookingPage({
 export default function App() {
   const currentPath = window.location.pathname;
   const searchParams = new URLSearchParams(window.location.search);
+  const pathArea = getAreaFromPath(currentPath);
+  const selectedArea = (() => {
+    const queryArea = searchParams.get("area");
+    return trainingAreas[queryArea] ? queryArea : pathArea || getStoredTrainingArea() || "jb";
+  })();
   const isAdminPage = currentPath === "/admin";
   const isBookingPage = currentPath === "/booking";
   const confirmationBookingId = currentPath.match(/^\/booking\/confirm\/([^/]+)$/)?.[1] || "";
@@ -3971,9 +4442,9 @@ export default function App() {
   void phone;
   const [players, setPlayers] = useState(1);
   const [duration, setDuration] = useState("1");
-  const [date, setDate] = useState(formatDate(new Date()));
+  const [date, setDate] = useState(() => selectedArea === "kl" && isBeforeKualaLumpurStart(new Date()) ? kualaLumpurStartDate : formatDate(new Date()));
   const [time, setTime] = useState("8:00 AM");
-  const [location, setLocation] = useState("Tennis Nusa Duta");
+  const [location, setLocation] = useState(() => trainingAreas[selectedArea]?.primaryLocation || trainingAreas.jb.primaryLocation);
   const [courtOption, setCourtOption] = useState("");
   const [coachingFormat, setCoachingFormat] = useState(() => selectedService?.id === "group" ? "group" : selectedService?.id === "sparring" ? "sparring" : "private");
   const [selectedCoachId, setSelectedCoachId] = useState("");
@@ -4043,6 +4514,13 @@ export default function App() {
     return getExpandedReservedSlots(selectedCoachBookings, dayRange);
   }, [date, selectedCoachBookings, selectedCoachId]);
 
+  const bookingCutoffApplies = useMemo(() => {
+    if (!selectedCoachId || selectedArea === "kl") return false;
+    const selectedCoachRecord = coaches.find((coach) => coach.coachId === selectedCoachId || coach.id === selectedCoachId);
+    const coachName = selectedCoachRecord?.coachName || selectedCoachRecord?.name || selectedCoachRecord?.email || "";
+    return isPrimaryIlhamCoachName(coachName) || selectedCoachRecord?.role === roles.SUPER_ADMIN;
+  }, [coaches, selectedArea, selectedCoachId]);
+
   const groupParticipants = useMemo(() => {
     if (!isFixedGroupCoaching) return [];
     return bookings
@@ -4054,7 +4532,7 @@ export default function App() {
   }, [bookings, date, isFixedGroupCoaching]);
 
   const availableSlots = useMemo(() => {
-    if (!selectedCoachId) return [];
+    if (!selectedCoachId || (selectedArea === "kl" && isBeforeKualaLumpurStart(date)) || (bookingCutoffApplies && isAfterCustomerBookingCutoff(date))) return [];
 
     const candidateSlots = isFixedGroupCoaching
       ? (parseBookingDate(date).getDay() === 2 && groupParticipants.length < groupCoachingCapacity ? ["8:00 PM"] : [])
@@ -4065,7 +4543,7 @@ export default function App() {
         !isPastTimeSlot(date, slot) &&
         (isFixedGroupCoaching || !hasBookingOverlap(selectedCoachBookings, date, slot, durationHours))
     );
-  }, [date, durationHours, groupParticipants.length, isFixedGroupCoaching, selectedCoachBookings, selectedCoachId]);
+  }, [bookingCutoffApplies, date, durationHours, groupParticipants.length, isFixedGroupCoaching, selectedArea, selectedCoachBookings, selectedCoachId]);
   const selectedBookingTime = availableSlots.includes(time) ? time : availableSlots[0] || "";
   const publicCoachOptions = useMemo(() => {
     const coachesById = new Map();
@@ -4081,14 +4559,22 @@ export default function App() {
           coachName: coach.coachName || coach.name || coach.email || coach.coachId || "Coach",
           coachEmail: coach.coachEmail || coach.email || "",
           coachPhone: coach.coachPhone || coach.phone || coach.whatsapp || "",
+          role: coach.role,
         });
       }
     });
 
-    return Array.from(coachesById.values()).sort((a, b) => {
+    const areaCoaches = Array.from(coachesById.values()).filter((coach) => {
+      const isCoachIlham = coach.role === roles.SUPER_ADMIN || isPrimaryIlhamCoachName(coach.coachName);
+      if (selectedArea === "kl") return isCoachIlham;
+      if (selectedArea === "jb") return !isCoachIlham;
+      return true;
+    });
+
+    return areaCoaches.sort((a, b) => {
       return String(a.coachName || "").localeCompare(String(b.coachName || ""));
     });
-  }, [coaches]);
+  }, [coaches, selectedArea]);
   const selectedCoach = publicCoachOptions.find((coach) => coach.coachId === selectedCoachId) || null;
   const selectedCoachAvailabilityIds = useMemo(() => {
     if (!selectedCoachId) return [];
@@ -4278,6 +4764,21 @@ export default function App() {
   }, [bundleSessions.length, editBookingId, isFixedGroupCoaching, publicCoachOptions, selectedCoachId]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
+  /* Kuala Lumpur launches with Coach Ilham on 1 October 2026. */
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (selectedArea !== "kl" || editBookingId) return;
+    if (isBeforeKualaLumpurStart(date)) {
+      const launchDate = parseBookingDate(kualaLumpurStartDate);
+      setDate(isFixedGroupCoaching ? getNextTuesdayDate(launchDate) : kualaLumpurStartDate);
+      setCalendarMonth(launchDate);
+    }
+    if (publicCoachOptions.length === 1 && selectedCoachId !== publicCoachOptions[0].coachId) {
+      setSelectedCoachId(publicCoachOptions[0].coachId);
+    }
+  }, [date, editBookingId, isFixedGroupCoaching, publicCoachOptions, selectedArea, selectedCoachId]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
   useEffect(() => {
     if (!adminUser || isAdminPage) return undefined;
     return onSnapshot(doc(db, "customers", adminUser.uid), (snapshot) => {
@@ -4291,9 +4792,6 @@ export default function App() {
     if (unsynced.length === 0) return;
 
     async function backfillAvailabilityLocks() {
-      const migrationRef = doc(db, "system", "availabilityLocksV1");
-      const migrationSnapshot = await getDoc(migrationRef);
-      if (migrationSnapshot.exists()) return;
       unsynced.forEach((booking) => syncedLegacyBookingIdsRef.current.add(booking.id));
       const writes = [];
       unsynced.forEach((booking) => {
@@ -4315,12 +4813,6 @@ export default function App() {
         });
         await batch.commit();
       }
-      await setDoc(migrationRef, {
-        completed: true,
-        bookingCount: unsynced.length,
-        completedAt: serverTimestamp(),
-        completedBy: adminUser?.uid || "",
-      });
     }
     backfillAvailabilityLocks().catch((error) => console.error("Availability lock backfill failed", error));
   }, [adminProfile, adminUser, bookings, isAdminPage]);
@@ -4596,10 +5088,12 @@ export default function App() {
 
   function addBundleSession() {
     if (!date || !selectedBookingTime || !selectedCoach) return setStatus("Please select a date, time and coach.");
+    if (selectedArea === "kl" && isBeforeKualaLumpurStart(date)) return setStatus("Kuala Lumpur bookings begin from 1 October 2026.");
+    if (bookingCutoffApplies && isAfterCustomerBookingCutoff(date)) return setStatus("Coach Ilham bookings are closed after 18 September 2026.");
     if (isFixedGroupCoaching && (parseBookingDate(date).getDay() !== 2 || selectedBookingTime !== "8:00 PM" || durationHours !== 2)) {
       return setStatus("Group Coaching is only available every Tuesday from 8:00 PM to 10:00 PM.");
     }
-    if (location === "Tennis Nusa Duta" && !courtOption) return setStatus("Please choose Indoor Court or Outdoor Court.");
+    if (requiresCourtOption(location) && !courtOption) return setStatus("Please choose Indoor Court or Outdoor Court.");
     if (bundleSessions.length >= 12) return setStatus("A bundle can contain up to 12 sessions.");
     if (bundleSessions.length > 0 && bundleSessions[0].coachId !== selectedCoach.coachId) return setStatus("All bundle sessions must use the same coach.");
 
@@ -4623,7 +5117,7 @@ export default function App() {
       durationHours,
       players: isFixedGroupCoaching ? 1 : players,
       location,
-      courtOption: location === "Tennis Nusa Duta" ? courtOption : "",
+      courtOption: requiresCourtOption(location) ? courtOption : "",
       coachingFormat,
       coachingFee: price,
     }].sort((a, b) => a.date.localeCompare(b.date) || allTimeSlots.indexOf(a.time) - allTimeSlots.indexOf(b.time)));
@@ -4693,6 +5187,8 @@ export default function App() {
             location: session.location,
             courtOption: session.courtOption,
             court: session.courtOption,
+            trainingArea: selectedArea,
+            trainingAreaName: trainingAreas[selectedArea]?.name || "",
             coachingFee: session.coachingFee,
             paymentStatus: "Unpaid",
             bookingStatus: "Pending Confirmation",
@@ -4794,6 +5290,14 @@ export default function App() {
       setStatus("Please select a date, time and coach.");
       return;
     }
+    if (selectedArea === "kl" && isBeforeKualaLumpurStart(date)) {
+      setStatus("Kuala Lumpur bookings begin from 1 October 2026.");
+      return;
+    }
+    if (bookingCutoffApplies && isAfterCustomerBookingCutoff(date)) {
+      setStatus("Coach Ilham bookings are closed after 18 September 2026.");
+      return;
+    }
     if (isFixedGroupCoaching && (parseBookingDate(date).getDay() !== 2 || selectedBookingTime !== "8:00 PM" || durationHours !== 2)) {
       setStatus("Group Coaching is only available every Tuesday from 8:00 PM to 10:00 PM.");
       return;
@@ -4807,7 +5311,7 @@ export default function App() {
       return;
     }
 
-    if (!isFixedGroupCoaching && location === "Tennis Nusa Duta" && !courtOption) {
+    if (!isFixedGroupCoaching && requiresCourtOption(location) && !courtOption) {
       setStatus("Please choose Indoor Court or Outdoor Court.");
       return;
     }
@@ -4838,8 +5342,10 @@ export default function App() {
       duration: durationHours,
       durationHours,
       location: isFixedGroupCoaching ? "Group Coaching Session" : location,
-      courtOption: isFixedGroupCoaching ? "" : location === "Tennis Nusa Duta" ? courtOption : "",
-      court: isFixedGroupCoaching ? "" : location === "Tennis Nusa Duta" ? courtOption : "",
+      courtOption: isFixedGroupCoaching ? "" : requiresCourtOption(location) ? courtOption : "",
+      court: isFixedGroupCoaching ? "" : requiresCourtOption(location) ? courtOption : "",
+      trainingArea: selectedArea,
+      trainingAreaName: trainingAreas[selectedArea]?.name || "",
       coachingFee: price,
       paymentStatus: "Unpaid",
       bookingStatus: "Pending Confirmation",
@@ -4925,7 +5431,7 @@ export default function App() {
             customerId: adminUser.uid,
             coachId: selectedCoach.coachId,
             title: "New group coaching registration",
-            message: `${customerProfile.fullName} registered for Group Coaching on ${date}, 8:00 PM–10:00 PM.`,
+            message: `${customerProfile.fullName} registered for Group Coaching on ${date}, 8:00 PMâ€“10:00 PM.`,
             name: customerProfile.fullName,
             phone: customerProfile.phone,
             email: adminUser.email || customerProfile.email || "",
@@ -4982,7 +5488,7 @@ export default function App() {
           time: selectedBookingTime,
           duration: durationHours,
           location,
-          courtOption: location === "Tennis Nusa Duta" ? courtOption : "",
+          courtOption: requiresCourtOption(location) ? courtOption : "",
           isRead: false,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -5197,6 +5703,8 @@ export default function App() {
   function getDateStatus(day) {
     if (!day) return null;
     if (!selectedCoachId) return "Select coach";
+    if (selectedArea === "kl" && isBeforeKualaLumpurStart(day)) return "Starts 1 Oct";
+    if (bookingCutoffApplies && isAfterCustomerBookingCutoff(day)) return "Closed";
     if (isFixedGroupCoaching && day.getDay() !== 2) return "Unavailable";
 
     const dayString = formatDate(day);
@@ -5249,6 +5757,7 @@ export default function App() {
     const successBundleBookings = successBooking?.bundleId ? bookings.filter((item) => item.bundleId === successBooking.bundleId) : [];
     if (isBookingPage) page = (
       <BookingPage
+        selectedArea={selectedArea}
         selectedService={selectedService}
         coachingFormat={coachingFormat}
         setCoachingFormat={setCoachingFormat}
@@ -5289,6 +5798,7 @@ export default function App() {
         getDateStatus={getDateStatus}
         selectedCoachBookings={selectedCoachBookings}
         groupParticipants={groupParticipants}
+        bookingCutoffApplies={bookingCutoffApplies}
       />
     );
     if (confirmationBookingId) page = <ConfirmationPage booking={confirmationBooking} bundleBookings={confirmationBundleBookings} user={adminUser} profile={customerProfile} onConfirm={confirmBooking} onConfirmBundle={confirmBundleBookings} loading={loading} status={status} />;
@@ -5299,7 +5809,7 @@ export default function App() {
     return <CustomerAccess key={adminUser?.uid || "signed-out"} user={adminUser} profile={customerProfile} loading={authLoading}>{page}</CustomerAccess>;
   }
 
-  return <HomePage />;
+  return <HomePage area={pathArea} />;
 
   /* eslint-disable no-unreachable */
   return (
@@ -5319,7 +5829,7 @@ export default function App() {
 
           <div>
             <p className="inline-block rounded-full border border-lime-400/40 px-4 py-2 text-sm text-lime-300">
-              ITF Coaching Level 1 • Sport Science Level 1
+              ITF Coaching Level 1 â€¢ Sport Science Level 1
             </p>
 
             <h1 className="mt-6 text-4xl md:text-6xl font-bold">
@@ -5454,9 +5964,9 @@ export default function App() {
           <div className="space-y-6">
             <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8">
               <div className="flex items-center justify-between gap-3 mb-6">
-                <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))} className="rounded-xl border border-neutral-700 px-3 py-2">←</button>
+                <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))} className="rounded-xl border border-neutral-700 px-3 py-2">â†</button>
                 <h2 className="text-2xl font-semibold text-center">{monthLabel}</h2>
-                <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))} className="rounded-xl border border-neutral-700 px-3 py-2">→</button>
+                <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))} className="rounded-xl border border-neutral-700 px-3 py-2">â†’</button>
               </div>
 
               <div className="grid grid-cols-7 gap-2 text-center text-xs text-neutral-400 mb-2">
@@ -5519,7 +6029,7 @@ export default function App() {
                 <div className="rounded-2xl bg-neutral-800 p-4"><div className="font-semibold text-white">Day Session</div><div>8AM - 7PM</div><div>Outdoor RM10/hour</div><div>Indoor RM15/hour</div></div>
                 <div className="rounded-2xl bg-neutral-800 p-4"><div className="font-semibold text-white">Night Session</div><div>7PM - 12AM</div><div>Outdoor RM20/hour</div><div>Indoor RM30/hour</div></div>
               </div>
-              <a href="https://booking.stadiumjohor.my/product-tag/tennis/" target="_blank" className="inline-block mt-6 text-lime-400 hover:text-lime-300">Book Court at Stadium Johor →</a>
+              <a href="https://booking.stadiumjohor.my/product-tag/tennis/" target="_blank" className="inline-block mt-6 text-lime-400 hover:text-lime-300">Book Court at Stadium Johor â†’</a>
             </div>
           </div>
         </div>
@@ -5528,3 +6038,8 @@ export default function App() {
   );
   /* eslint-enable no-unreachable */
 }
+
+
+
+
+
