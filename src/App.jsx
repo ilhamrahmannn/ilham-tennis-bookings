@@ -2014,8 +2014,7 @@ function TransferSessionModal({ booking, coaches, user, userProfile, onClose }) 
 }
 
 function getAreaFromPath(pathname) {
-  if (pathname === trainingAreas.kl.slug) return "kl";
-  if (pathname === trainingAreas.jb.slug) return "jb";
+  if (pathname === trainingAreas.jb.slug || pathname === trainingAreas.kl.slug) return "jb";
   return "";
 }
 
@@ -2031,7 +2030,7 @@ function isBeforeKualaLumpurStart(date) {
 function getStoredTrainingArea() {
   try {
     const value = window.localStorage.getItem("coach-ilham-training-area");
-    return trainingAreas[value] ? value : "";
+    return value === "jb" ? "jb" : "";
   } catch {
     return "";
   }
@@ -3628,12 +3627,6 @@ function AreaSelectionModal({ onSelect }) {
         <h2 id="area-picker-title">Where would you like to train?</h2>
         <span>Select your area to see the correct coaches, venues and available sessions.</span>
         <div className="premium-area-options">
-          <button type="button" onClick={() => onSelect("kl")}>
-            <small>From 1 October 2026</small>
-            <strong>Kuala Lumpur</strong>
-            <span>Train with Coach Ilham at Jalan Duta or your preferred court.</span>
-            <b>Choose Kuala Lumpur â†’</b>
-          </button>
           <button type="button" onClick={() => onSelect("jb")}>
             <small>Available now</small>
             <strong>Johor Bahru</strong>
@@ -3647,7 +3640,7 @@ function AreaSelectionModal({ onSelect }) {
 }
 
 function HomePage({ area = "" }) {
-  const [showAreaPicker, setShowAreaPicker] = useState(!area);
+  const [showAreaPicker, setShowAreaPicker] = useState(false);
   const activeArea = trainingAreas[area] || null;
   const isKualaLumpur = area === "kl";
   const whatsappUrl = `https://wa.me/601137507963?text=${encodeURIComponent("Hi Coach Ilham, I would like to enquire about tennis coaching and book a session.")}`;
@@ -4425,7 +4418,7 @@ export default function App() {
   const pathArea = getAreaFromPath(currentPath);
   const selectedArea = (() => {
     const queryArea = searchParams.get("area");
-    return trainingAreas[queryArea] ? queryArea : pathArea || getStoredTrainingArea() || "jb";
+    return queryArea === "jb" ? "jb" : pathArea || getStoredTrainingArea() || "jb";
   })();
   const isAdminPage = currentPath === "/admin";
   const isBookingPage = currentPath === "/booking";
@@ -6038,6 +6031,7 @@ export default function App() {
   );
   /* eslint-enable no-unreachable */
 }
+
 
 
 
