@@ -3708,10 +3708,7 @@ function HomePage({ area = "" }) {
     <div className="premium-home min-h-screen w-full max-w-full overflow-x-hidden bg-neutral-950 text-white">
       {showAreaPicker && <AreaSelectionModal onSelect={selectArea} />}
       <div className="premium-home-shell w-full max-w-6xl mx-auto px-4 py-8 sm:px-5 sm:py-12">
-        <div className="premium-topbar flex justify-between mb-6">
-          <button type="button" onClick={() => setShowAreaPicker(true)} className="premium-area-change">
-            {activeArea ? `${activeArea.name} Â· Change area` : "Choose training area"}
-          </button>
+        <div className="premium-topbar flex justify-end mb-6">
           <a
             href="/admin"
             className="rounded-full border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-lime-400 hover:text-lime-300 transition"
@@ -3758,8 +3755,8 @@ function HomePage({ area = "" }) {
             <div className="premium-guide-label">Choose your coach</div>
             <div className="premium-coach-preview-card">
               <img src={coachImage} alt="Coach Ilham" />
-              <div><strong>"Coach Ilham"</strong><span>{isKualaLumpur ? "ITF Level 1 Â· Sport Science Level 1" : "Choose from available academy coaches"}</span><small>Experienced Â· Supportive Â· Results-driven</small></div>
-              <span aria-hidden="true">âŒ„</span>
+              <div><strong>Coach Ilham</strong><span>ITF Level 1 - Sport Science Level 1</span><small>Private tennis coaching for kids and adults</small></div>
+              <span aria-hidden="true"></span>
             </div>
           </article>
           <article className="premium-how-it-works">
@@ -4129,7 +4126,7 @@ function BookingPage({
 
         <div className="premium-booking-heading mb-8">
           <p className="inline-block rounded-full border border-lime-400/40 px-4 py-2 text-sm text-lime-300">
-            Coach Ilham Academy Â· {areaDetails.name}
+            Coach Ilham Academy - {areaDetails.name}
           </p>
           <h1 className="mt-5 text-3xl font-bold">Book Your Tennis Session</h1>
           <p className="mt-3 rounded-2xl bg-neutral-900 border border-neutral-800 px-4 py-3 text-sm text-neutral-200">
@@ -4160,8 +4157,8 @@ function BookingPage({
               )}
               {isFixedGroupCoaching && (
                 <div className="premium-fixed-session-note">
-                  <strong>Group Coaching Â· Every Tuesday</strong>
-                  <span>8:00 PMâ€“10:00 PM Â· RM60 per player Â· Maximum 6 players.</span>
+                  <strong>Group Coaching - Every Tuesday</strong>
+                  <span>8:00 PM - 10:00 PM - RM60 per player - Maximum 6 players.</span>
                 </div>
               )}
               {!isFixedGroupCoaching && (
@@ -4185,8 +4182,8 @@ function BookingPage({
 
               {!isFixedGroupCoaching && <div className="premium-time-picker">
                 <div className="premium-time-picker-head">
-                  <span aria-hidden="true">â—·</span>
-                  <span>{selectedCoachId ? `Available times Â· ${parseBookingDate(date).toLocaleDateString("en-MY", { day: "numeric", month: "short" })}` : "Choose a coach to view available times"}</span>
+                  <span aria-hidden="true">-</span>
+                  <span>{selectedCoachId ? `Available times - ${parseBookingDate(date).toLocaleDateString("en-MY", { day: "numeric", month: "short" })}` : "Choose a coach to view available times"}</span>
                 </div>
                 {selectedCoachId && availableSlots.length > 0 ? (
                   <div className="premium-time-grid">
@@ -4331,7 +4328,7 @@ function BookingPage({
               {!isFixedGroupCoaching && <textarea rows="4" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Notes" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />}
 
               <button onClick={bundleSessions.length > 0 ? submitBundleBooking : submitBooking} disabled={loading || (isFixedGroupCoaching ? groupParticipants.length >= groupCoachingCapacity || availableSlots.length === 0 : (!bundleSessions.length && (!selectedCoachId || availableSlots.length === 0)))} className="w-full bg-white text-black rounded-2xl py-4 font-semibold hover:bg-neutral-200 transition disabled:opacity-50">
-                {loading ? "Please wait..." : isFixedGroupCoaching ? groupParticipants.length >= groupCoachingCapacity ? "Group Full" : "Register for Group Coaching Â· RM60" : bundleSessions.length > 0 ? `Reserve Bundle (${bundleSessions.length})` : "Book Now"}
+                {loading ? "Please wait..." : isFixedGroupCoaching ? groupParticipants.length >= groupCoachingCapacity ? "Group Full" : "Register for Group Coaching - RM60" : bundleSessions.length > 0 ? `Reserve Bundle (${bundleSessions.length})` : "Book Now"}
               </button>
 
               {status && <p className="text-sm text-neutral-300">{status}</p>}
@@ -6031,6 +6028,7 @@ export default function App() {
   );
   /* eslint-enable no-unreachable */
 }
+
 
 
 

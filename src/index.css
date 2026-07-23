@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700&family=Newsreader:ital,opsz,wght@1,6..72,500&display=swap");
+﻿@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700&family=Newsreader:ital,opsz,wght@1,6..72,500&display=swap");
 @import "tailwindcss";
 
 :root {
@@ -791,6 +791,15 @@ tbody tr:hover td {
   color: var(--premium-ink);
 }
 
+.premium-booking-cutoff-note {
+  margin: -0.35rem 0 0;
+  padding: 0.7rem 0.85rem;
+  border-left: 3px solid var(--premium-rust);
+  background: #f5f1e9;
+  color: #68776f;
+  font-size: 0.7rem;
+}
+
 .premium-coaching-format > label {
   display: block;
   margin-bottom: 0.65rem;
@@ -1278,6 +1287,142 @@ tbody tr:hover td {
     var(--premium-ink-2) !important;
 }
 
+.premium-student-export {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 1.5rem;
+  border: 1px solid rgba(143, 189, 50, 0.28);
+  border-radius: 10px;
+  background:
+    linear-gradient(120deg, rgba(143, 189, 50, 0.13), transparent 48%),
+    var(--premium-ink-2);
+}
+
+.premium-student-export-copy {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.premium-student-export-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 3.25rem;
+  height: 3.25rem;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--premium-lime);
+  color: var(--premium-ink);
+}
+
+.premium-student-export-copy p {
+  margin: 0;
+  color: var(--premium-lime);
+  font-family: "Manrope", sans-serif;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.premium-student-export-copy h2 {
+  margin: 0.2rem 0 0;
+  font-size: 1.25rem;
+}
+
+.premium-student-export-copy > div > span {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--premium-muted);
+  font-size: 0.75rem;
+}
+
+.premium-student-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.65rem;
+}
+
+.premium-student-export-actions button,
+.premium-student-export-actions a {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid rgba(220, 235, 226, 0.18);
+  border-radius: 4px;
+  background: var(--premium-forest);
+  color: #fff;
+  font-family: "Manrope", sans-serif;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.premium-student-export-actions button:first-child {
+  border-color: var(--premium-lime);
+  background: var(--premium-lime);
+  color: var(--premium-ink);
+}
+
+.premium-student-export-actions button:hover,
+.premium-student-export-actions a:hover {
+  border-color: var(--premium-lime);
+  transform: translateY(-1px);
+}
+
+.premium-student-export-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.premium-student-export-message {
+  grid-column: 1 / -1;
+  display: block;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(220, 235, 226, 0.13);
+}
+
+.premium-student-export-message > span {
+  display: block;
+  margin-bottom: 0.55rem;
+  color: #e4ede8;
+  font-family: "Manrope", sans-serif;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.premium-student-export-message textarea {
+  width: 100%;
+  min-height: 82px;
+  resize: vertical;
+}
+
+.premium-student-export-message small {
+  display: block;
+  margin-top: 0.45rem;
+  color: var(--premium-muted);
+  font-size: 0.65rem;
+}
+
+.premium-student-export-message code {
+  padding: 0.12rem 0.3rem;
+  border-radius: 3px;
+  background: rgba(143, 189, 50, 0.14);
+  color: var(--premium-lime);
+}
+
+.premium-student-export-status {
+  grid-column: 1 / -1;
+  margin: -0.5rem 0 0;
+  color: #c6d3cc;
+  font-size: 0.72rem;
+}
+
 .premium-admin-page button.bg-white,
 .premium-admin-page button.bg-lime-400,
 .premium-customer-page button.bg-white,
@@ -1325,6 +1470,14 @@ tbody tr:hover td {
 
   .premium-friendly-guide {
     grid-template-columns: 1fr;
+  }
+
+  .premium-student-export {
+    grid-template-columns: 1fr;
+  }
+
+  .premium-student-export-actions {
+    justify-content: flex-start;
   }
 
   .premium-step-list {
@@ -1446,4 +1599,136 @@ tbody tr:hover td {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+.premium-area-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgba(5, 24, 18, 0.82);
+  backdrop-filter: blur(12px);
+}
+
+.premium-area-modal {
+  width: min(760px, 100%);
+  padding: clamp(1.5rem, 4vw, 3rem);
+  border: 1px solid #d8d3c8;
+  background: #fbfaf6;
+  color: #08271e;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.32);
+}
+
+.premium-area-modal > p,
+.premium-location-seo > p {
+  color: #d95f43;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.premium-area-modal h2 {
+  margin-top: 0.6rem;
+  font-size: clamp(2rem, 5vw, 3.4rem);
+  line-height: 1;
+}
+
+.premium-area-modal > span {
+  display: block;
+  margin-top: 1rem;
+  color: #59645f;
+}
+
+.premium-area-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 2rem;
+}
+
+.premium-area-options button {
+  display: flex;
+  min-height: 220px;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 1.5rem;
+  border: 1px solid #d8d3c8;
+  background: #fff;
+  text-align: left;
+  transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.premium-area-options button:hover,
+.premium-area-options button:focus-visible {
+  border-color: #618e25;
+  box-shadow: 0 16px 34px rgba(8, 39, 30, 0.12);
+  transform: translateY(-3px);
+  outline: none;
+}
+
+.premium-area-options small { color: #758079; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.premium-area-options strong { margin-top: 1.1rem; font-size: 1.65rem; }
+.premium-area-options span { margin-top: 0.7rem; color: #59645f; line-height: 1.6; }
+.premium-area-options b { margin-top: auto; padding-top: 1.25rem; color: #527c1f; }
+
+.premium-area-change {
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  padding: 0.65rem 0.9rem;
+  color: inherit;
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.premium-coach-avatar {
+  display: grid;
+  width: 3.4rem;
+  height: 3.4rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: #08271e;
+  color: #fff;
+  font-weight: 700;
+}
+
+.premium-location-seo {
+  margin-top: 2.5rem;
+  padding: clamp(1.5rem, 4vw, 3rem);
+  border: 1px solid #d8d3c8;
+  background: #f3f0e7;
+  color: #08271e;
+}
+
+.premium-location-seo h2 { max-width: 820px; margin-top: 0.7rem; font-size: clamp(2rem, 4vw, 3.4rem); line-height: 1.05; }
+.premium-location-seo > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2rem; margin-top: 1.5rem; color: #4f5c56; line-height: 1.75; }
+.premium-location-seo a { display: inline-block; margin-top: 1.5rem; color: #527c1f; font-weight: 700; }
+
+@media (max-width: 640px) {
+  .premium-area-options,
+  .premium-location-seo > div { grid-template-columns: 1fr; }
+  .premium-area-options button { min-height: 175px; }
+  .premium-topbar { gap: 0.75rem; }
+  .premium-area-change { font-size: 0.58rem; }
+}
+
+.premium-booking-page button.bg-white {
+  background: var(--premium-ink) !important;
+  color: #ffffff !important;
+  border: 1px solid var(--premium-ink) !important;
+  box-shadow: 0 12px 28px rgba(8, 39, 30, 0.18) !important;
+}
+
+.premium-booking-page button.bg-white:hover:not(:disabled) {
+  background: var(--premium-forest) !important;
+  border-color: var(--premium-lime) !important;
+  transform: translateY(-1px);
+}
+
+.premium-booking-page button.bg-white:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
