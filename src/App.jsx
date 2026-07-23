@@ -1,4 +1,4 @@
-import coachImage from "./assets/ilham.jpg";
+﻿import coachImage from "./assets/ilham.jpg";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, signOut } from "firebase/auth";
 import { Timestamp, addDoc, collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, query, runTransaction, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
 import { Bell, ClipboardCopy, Download, ExternalLink, MessageCircle, Users } from "lucide-react";
@@ -842,7 +842,7 @@ function getBundleWhatsAppMessage(bookings) {
     `Bundle: ${first.bundleReference || first.bundleId || "-"}`,
     `Sessions: ${sessions.length}`,
     "",
-    ...sessions.map((session, index) => `${index + 1}. ${session.date} · ${session.startTime || session.time} · ${session.durationHours || session.duration} hour(s) · ${session.location}${session.courtOption || session.court ? ` (${session.courtOption || session.court})` : ""}`),
+    ...sessions.map((session, index) => `${index + 1}. ${session.date} Â· ${session.startTime || session.time} Â· ${session.durationHours || session.duration} hour(s) Â· ${session.location}${session.courtOption || session.court ? ` (${session.courtOption || session.court})` : ""}`),
     "",
     "Please open the coach dashboard to review the request.",
   ].join("\n");
@@ -1471,7 +1471,7 @@ function PackageTracker({ packages, bookings, customers, canEdit, user, userProf
           <select value={newPackage.customerId} onChange={(e) => selectCustomer(e.target.value, setNewPackage)} className="rounded-xl bg-neutral-800 border border-neutral-700 px-3 py-2 md:col-span-4">
             <option value="">Auto-link by exact phone or name</option>
             {newPackage.customerId && !customers.some((customer) => customer.id === newPackage.customerId) && <option value={newPackage.customerId}>Linked customer from booking</option>}
-            {customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.fullName || customer.name || customer.email} · {customer.phone || customer.email}</option>)}
+            {customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.fullName || customer.name || customer.email} Â· {customer.phone || customer.email}</option>)}
           </select>
           <div className="relative md:col-span-2" onBlur={hideStudentSuggestionsSoon}>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -1967,7 +1967,7 @@ function TransferSessionModal({ booking, coaches, user, userProfile, onClose }) 
           <div>
             <h2 className="text-2xl font-semibold">Transfer Session</h2>
             <p className="mt-2 text-sm text-neutral-400">
-              {booking.name} · {booking.date} · {booking.time}
+              {booking.name} Â· {booking.date} Â· {booking.time}
             </p>
           </div>
           <button type="button" onClick={onClose} className="rounded-xl bg-neutral-800 px-3 py-2">Close</button>
@@ -2083,7 +2083,7 @@ function CancelBookingModal({ booking, onClose, onConfirm }) {
           <div>
             <p className="text-xs font-semibold uppercase tracking-widest text-red-300">Cancellation required</p>
             <h2 className="mt-2 text-2xl font-semibold">Cancel Booking</h2>
-            <p className="mt-2 text-sm text-neutral-400">{booking.name || booking.customerName} · {booking.date} · {booking.time}</p>
+            <p className="mt-2 text-sm text-neutral-400">{booking.name || booking.customerName} Â· {booking.date} Â· {booking.time}</p>
           </div>
           <button type="button" onClick={onClose} disabled={submitting} className="rounded-xl bg-neutral-800 px-3 py-2 disabled:opacity-50">Close</button>
         </div>
@@ -2126,7 +2126,7 @@ function TransferLogs({ logs }) {
         {logs.slice(0, 10).map((log) => (
           <div key={log.id} className="rounded-2xl bg-neutral-950 p-4 text-sm text-neutral-300">
             <div className="font-semibold text-white">
-              {log.date} {log.time} · {log.customerName || "Session"}
+              {log.date} {log.time} Â· {log.customerName || "Session"}
             </div>
             <div className="mt-2">
               Transferred by {log.transferredByName || "Super Admin"} from {log.fromCoachName || "-"} to {log.toCoachName || "-"}.
@@ -2451,9 +2451,9 @@ function StudentDirectoryExport({ bookings, packages, customers }) {
   async function copyForGoogleSheets() {
     try {
       const sanitizeSheetCell = (value) => String(value ?? "")
-        .replace(/\r?\n+/g, " · ")
+        .replace(/\r?\n+/g, " Â· ")
         .replaceAll("\t", " ")
-        .replace(/\s*·\s*·\s*/g, " · ")
+        .replace(/\s*Â·\s*Â·\s*/g, " Â· ")
         .trim();
       const tabSeparated = exportRows.map((row) => row.map(sanitizeSheetCell).join("\t")).join("\n");
       await navigator.clipboard.writeText(tabSeparated);
@@ -2471,7 +2471,7 @@ function StudentDirectoryExport({ bookings, packages, customers }) {
         <div>
           <p>Student Directory</p>
           <h2>Export student contact information</h2>
-          <span>{students.length} student{students.length === 1 ? "" : "s"} found from the selected coach’s bookings and packages.</span>
+          <span>{students.length} student{students.length === 1 ? "" : "s"} found from the selected coachâ€™s bookings and packages.</span>
         </div>
       </div>
       <div className="premium-student-export-actions">
@@ -2482,7 +2482,7 @@ function StudentDirectoryExport({ bookings, packages, customers }) {
       <label className="premium-student-export-message">
         <span>WhatsApp message included in the export</span>
         <textarea rows="3" value={whatsAppMessage} onChange={(event) => setWhatsAppMessage(event.target.value)} placeholder="Write the WhatsApp message here..." />
-        <small>Use <code>{"{name}"}</code> to insert each student’s name automatically.</small>
+        <small>Use <code>{"{name}"}</code> to insert each studentâ€™s name automatically.</small>
       </label>
       {exportStatus && <p className="premium-student-export-status">{exportStatus}</p>}
     </section>
@@ -3238,7 +3238,7 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
           <div>
             <h1 className="premium-page-title text-4xl font-bold">Admin Dashboard</h1>
             <p className="mt-2 text-neutral-400">
-              {getCoachName(user, userProfile)} · {userRole}
+              {getCoachName(user, userProfile)} Â· {userRole}
             </p>
           </div>
 
@@ -3446,7 +3446,7 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
             }}
             className="rounded-2xl bg-neutral-800 px-5 py-3"
           >
-            ← Previous Week
+            â† Previous Week
           </button>
 
           <button
@@ -3457,7 +3457,7 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
             }}
             className="rounded-2xl bg-neutral-800 px-5 py-3"
           >
-            Next Week →
+            Next Week â†’
           </button>
         </div>
 
@@ -3595,7 +3595,7 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
 
 
         <a href="/" className="inline-block mt-6 text-lime-400">
-          ← Back to booking page
+          â† Back to booking page
         </a>
 
       </div>
@@ -3631,7 +3631,7 @@ function AreaSelectionModal({ onSelect }) {
             <small>Available now</small>
             <strong>Johor Bahru</strong>
             <span>Book with the Coach Ilham Academy coaching team in Johor Bahru.</span>
-            <b>Choose Johor Bahru →</b>
+            <b>Choose Johor Bahru â†’</b>
           </button>
         </div>
       </div>
@@ -3710,7 +3710,7 @@ function HomePage({ area = "" }) {
       <div className="premium-home-shell w-full max-w-6xl mx-auto px-4 py-8 sm:px-5 sm:py-12">
         <div className="premium-topbar flex justify-between mb-6">
           <button type="button" onClick={() => setShowAreaPicker(true)} className="premium-area-change">
-            {activeArea ? `${activeArea.name} · Change area` : "Choose training area"}
+            {activeArea ? `${activeArea.name} Â· Change area` : "Choose training area"}
           </button>
           <a
             href="/admin"
@@ -3757,9 +3757,9 @@ function HomePage({ area = "" }) {
           <article className="premium-coach-preview">
             <div className="premium-guide-label">Choose your coach</div>
             <div className="premium-coach-preview-card">
-              {isKualaLumpur ? <img src={coachImage} alt="Coach Ilham" /> : <div className="premium-coach-avatar" aria-hidden="true">CA</div>}
-              <div><strong>{isKualaLumpur ? "Coach Ilham" : "Johor Bahru Coaching Team"}</strong><span>{isKualaLumpur ? "ITF Level 1 · Sport Science Level 1" : "Choose from available academy coaches"}</span><small>Experienced · Supportive · Results-driven</small></div>
-              <span aria-hidden="true">⌄</span>
+              <img src={coachImage} alt="Coach Ilham" />
+              <div><strong>"Coach Ilham"</strong><span>{isKualaLumpur ? "ITF Level 1 Â· Sport Science Level 1" : "Choose from available academy coaches"}</span><small>Experienced Â· Supportive Â· Results-driven</small></div>
+              <span aria-hidden="true">âŒ„</span>
             </div>
           </article>
           <article className="premium-how-it-works">
@@ -4006,7 +4006,7 @@ function CustomerPackageSummary({ packages, bookings }) {
     const usage = getPackageUsage(bookings, packageRecord);
     const total = Number(packageRecord.totalPackageSessions || packageRecord.totalSessions || 0);
     const updatedAt = packageRecord.updatedAt?.toDate?.();
-    return <article key={packageRecord.id} className="rounded-2xl border border-lime-400/30 bg-lime-400/5 p-5"><div className="flex items-start justify-between gap-3"><div><p className="text-sm capitalize text-lime-300">{packageRecord.status || "active"}</p><h3 className="mt-1 text-lg font-semibold">{packageRecord.packageLabel || packageRecord.packageType || "Coaching Package"}</h3></div><span className="rounded-full bg-lime-400 px-3 py-1 text-sm font-semibold text-black">{usage.remainingSessions} left</span></div><div className="mt-4 h-2 overflow-hidden rounded-full bg-neutral-800"><div className="h-full bg-lime-400" style={{ width: `${total > 0 ? Math.min(100, (usage.usedSessions / total) * 100) : 0}%` }} /></div><p className="mt-2 text-sm text-neutral-300">Used {usage.usedSessions} of {total} sessions</p><p className="mt-1 text-sm text-neutral-400">Payment: {packageRecord.paymentStatus || "Unpaid"}{packageRecord.paymentAmount ? ` · RM${packageRecord.paymentAmount}` : ""}</p>{packageRecord.notes && <p className="mt-3 rounded-xl bg-neutral-950 p-3 text-sm text-neutral-300">Coach note: {packageRecord.notes}</p>}<p className="mt-3 text-xs text-lime-300">{packageRecord.updateMessage || "Your coach updated this package."}</p><p className="mt-1 text-xs text-neutral-500">Updated by {packageRecord.updatedByName || packageRecord.coachName || "Coach"}{updatedAt ? ` · ${updatedAt.toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" })}` : ""}</p></article>;
+    return <article key={packageRecord.id} className="rounded-2xl border border-lime-400/30 bg-lime-400/5 p-5"><div className="flex items-start justify-between gap-3"><div><p className="text-sm capitalize text-lime-300">{packageRecord.status || "active"}</p><h3 className="mt-1 text-lg font-semibold">{packageRecord.packageLabel || packageRecord.packageType || "Coaching Package"}</h3></div><span className="rounded-full bg-lime-400 px-3 py-1 text-sm font-semibold text-black">{usage.remainingSessions} left</span></div><div className="mt-4 h-2 overflow-hidden rounded-full bg-neutral-800"><div className="h-full bg-lime-400" style={{ width: `${total > 0 ? Math.min(100, (usage.usedSessions / total) * 100) : 0}%` }} /></div><p className="mt-2 text-sm text-neutral-300">Used {usage.usedSessions} of {total} sessions</p><p className="mt-1 text-sm text-neutral-400">Payment: {packageRecord.paymentStatus || "Unpaid"}{packageRecord.paymentAmount ? ` Â· RM${packageRecord.paymentAmount}` : ""}</p>{packageRecord.notes && <p className="mt-3 rounded-xl bg-neutral-950 p-3 text-sm text-neutral-300">Coach note: {packageRecord.notes}</p>}<p className="mt-3 text-xs text-lime-300">{packageRecord.updateMessage || "Your coach updated this package."}</p><p className="mt-1 text-xs text-neutral-500">Updated by {packageRecord.updatedByName || packageRecord.coachName || "Coach"}{updatedAt ? ` Â· ${updatedAt.toLocaleString("en-MY", { dateStyle: "medium", timeStyle: "short" })}` : ""}</p></article>;
   })}</div></section>;
 }
 
@@ -4034,7 +4034,7 @@ function MyBookingsPage({ bookings, packages, user, profile }) {
                   <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs capitalize text-neutral-400">{booking.status.replaceAll("_", " ")}</span>
                 </div>
                 <h3 className="mt-1 font-semibold">{booking.coachName}</h3>
-                <p className="mt-1 text-sm text-neutral-300">{booking.date} · {booking.time} · {booking.duration} hour(s)</p>
+                <p className="mt-1 text-sm text-neutral-300">{booking.date} Â· {booking.time} Â· {booking.duration} hour(s)</p>
                 <p className="text-sm text-neutral-500">{booking.location}</p>
               </div>
               <div className="flex shrink-0 flex-wrap gap-2 text-sm sm:justify-end">
@@ -4129,7 +4129,7 @@ function BookingPage({
 
         <div className="premium-booking-heading mb-8">
           <p className="inline-block rounded-full border border-lime-400/40 px-4 py-2 text-sm text-lime-300">
-            Coach Ilham Academy · {areaDetails.name}
+            Coach Ilham Academy Â· {areaDetails.name}
           </p>
           <h1 className="mt-5 text-3xl font-bold">Book Your Tennis Session</h1>
           <p className="mt-3 rounded-2xl bg-neutral-900 border border-neutral-800 px-4 py-3 text-sm text-neutral-200">
@@ -4160,8 +4160,8 @@ function BookingPage({
               )}
               {isFixedGroupCoaching && (
                 <div className="premium-fixed-session-note">
-                  <strong>Group Coaching · Every Tuesday</strong>
-                  <span>8:00 PM–10:00 PM · RM60 per player · Maximum 6 players.</span>
+                  <strong>Group Coaching Â· Every Tuesday</strong>
+                  <span>8:00 PMâ€“10:00 PM Â· RM60 per player Â· Maximum 6 players.</span>
                 </div>
               )}
               {!isFixedGroupCoaching && (
@@ -4185,8 +4185,8 @@ function BookingPage({
 
               {!isFixedGroupCoaching && <div className="premium-time-picker">
                 <div className="premium-time-picker-head">
-                  <span aria-hidden="true">◷</span>
-                  <span>{selectedCoachId ? `Available times · ${parseBookingDate(date).toLocaleDateString("en-MY", { day: "numeric", month: "short" })}` : "Choose a coach to view available times"}</span>
+                  <span aria-hidden="true">â—·</span>
+                  <span>{selectedCoachId ? `Available times Â· ${parseBookingDate(date).toLocaleDateString("en-MY", { day: "numeric", month: "short" })}` : "Choose a coach to view available times"}</span>
                 </div>
                 {selectedCoachId && availableSlots.length > 0 ? (
                   <div className="premium-time-grid">
@@ -4223,8 +4223,8 @@ function BookingPage({
                     {bundleSessions.map((session, index) => (
                       <article key={session.clientId}>
                         <span>{String(index + 1).padStart(2, "0")}</span>
-                        <div><strong>{session.date} · {session.time}</strong><small>{session.durationHours} hour(s) · {session.location}{session.courtOption ? ` · ${session.courtOption}` : ""}</small></div>
-                        <button type="button" onClick={() => removeBundleSession(session.clientId)} aria-label={`Remove ${session.date} ${session.time}`}>×</button>
+                        <div><strong>{session.date} Â· {session.time}</strong><small>{session.durationHours} hour(s) Â· {session.location}{session.courtOption ? ` Â· ${session.courtOption}` : ""}</small></div>
+                        <button type="button" onClick={() => removeBundleSession(session.clientId)} aria-label={`Remove ${session.date} ${session.time}`}>Ã—</button>
                       </article>
                     ))}
                   </div>
@@ -4331,7 +4331,7 @@ function BookingPage({
               {!isFixedGroupCoaching && <textarea rows="4" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Notes" className="w-full rounded-2xl bg-neutral-800 border border-neutral-700 px-4 py-3 outline-none focus:border-lime-400" />}
 
               <button onClick={bundleSessions.length > 0 ? submitBundleBooking : submitBooking} disabled={loading || (isFixedGroupCoaching ? groupParticipants.length >= groupCoachingCapacity || availableSlots.length === 0 : (!bundleSessions.length && (!selectedCoachId || availableSlots.length === 0)))} className="w-full bg-white text-black rounded-2xl py-4 font-semibold hover:bg-neutral-200 transition disabled:opacity-50">
-                {loading ? "Please wait..." : isFixedGroupCoaching ? groupParticipants.length >= groupCoachingCapacity ? "Group Full" : "Register for Group Coaching · RM60" : bundleSessions.length > 0 ? `Reserve Bundle (${bundleSessions.length})` : "Book Now"}
+                {loading ? "Please wait..." : isFixedGroupCoaching ? groupParticipants.length >= groupCoachingCapacity ? "Group Full" : "Register for Group Coaching Â· RM60" : bundleSessions.length > 0 ? `Reserve Bundle (${bundleSessions.length})` : "Book Now"}
               </button>
 
               {status && <p className="text-sm text-neutral-300">{status}</p>}
@@ -5424,7 +5424,7 @@ export default function App() {
             customerId: adminUser.uid,
             coachId: selectedCoach.coachId,
             title: "New group coaching registration",
-            message: `${customerProfile.fullName} registered for Group Coaching on ${date}, 8:00 PM–10:00 PM.`,
+            message: `${customerProfile.fullName} registered for Group Coaching on ${date}, 8:00 PMâ€“10:00 PM.`,
             name: customerProfile.fullName,
             phone: customerProfile.phone,
             email: adminUser.email || customerProfile.email || "",
@@ -5822,7 +5822,7 @@ export default function App() {
 
           <div>
             <p className="inline-block rounded-full border border-lime-400/40 px-4 py-2 text-sm text-lime-300">
-              ITF Coaching Level 1 • Sport Science Level 1
+              ITF Coaching Level 1 â€¢ Sport Science Level 1
             </p>
 
             <h1 className="mt-6 text-4xl md:text-6xl font-bold">
@@ -5957,9 +5957,9 @@ export default function App() {
           <div className="space-y-6">
             <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 md:p-8">
               <div className="flex items-center justify-between gap-3 mb-6">
-                <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))} className="rounded-xl border border-neutral-700 px-3 py-2">←</button>
+                <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))} className="rounded-xl border border-neutral-700 px-3 py-2">â†</button>
                 <h2 className="text-2xl font-semibold text-center">{monthLabel}</h2>
-                <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))} className="rounded-xl border border-neutral-700 px-3 py-2">→</button>
+                <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))} className="rounded-xl border border-neutral-700 px-3 py-2">â†’</button>
               </div>
 
               <div className="grid grid-cols-7 gap-2 text-center text-xs text-neutral-400 mb-2">
@@ -6022,7 +6022,7 @@ export default function App() {
                 <div className="rounded-2xl bg-neutral-800 p-4"><div className="font-semibold text-white">Day Session</div><div>8AM - 7PM</div><div>Outdoor RM10/hour</div><div>Indoor RM15/hour</div></div>
                 <div className="rounded-2xl bg-neutral-800 p-4"><div className="font-semibold text-white">Night Session</div><div>7PM - 12AM</div><div>Outdoor RM20/hour</div><div>Indoor RM30/hour</div></div>
               </div>
-              <a href="https://booking.stadiumjohor.my/product-tag/tennis/" target="_blank" className="inline-block mt-6 text-lime-400 hover:text-lime-300">Book Court at Stadium Johor →</a>
+              <a href="https://booking.stadiumjohor.my/product-tag/tennis/" target="_blank" className="inline-block mt-6 text-lime-400 hover:text-lime-300">Book Court at Stadium Johor â†’</a>
             </div>
           </div>
         </div>
@@ -6031,6 +6031,7 @@ export default function App() {
   );
   /* eslint-enable no-unreachable */
 }
+
 
 
 
