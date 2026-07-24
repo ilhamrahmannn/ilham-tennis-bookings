@@ -3939,7 +3939,8 @@ function BookingDetails({ booking }) {
 
 function SelectedCoachWhatsAppLink({ booking, bookings = [] }) {
   const group = bookings.length > 1 ? bookings : [booking];
-  const coachUrl = group.length > 1 ? getBundleWhatsAppUrl(booking.coachPhone, group) : getWhatsAppBookingUrl(booking.coachPhone, booking);
+  const coachPhone = getCoachWhatsAppNumber(booking);
+  const coachUrl = group.length > 1 ? getBundleWhatsAppUrl(coachPhone, group) : getWhatsAppBookingUrl(coachPhone, booking);
 
   if (!coachUrl) return <p className="mt-4 text-sm text-amber-300">The selected coach does not have a WhatsApp number saved yet.</p>;
 
@@ -3956,7 +3957,7 @@ function ConfirmationPage({ booking, bundleBookings = [], user, profile, onConfi
   const expiryDates = group.map((item) => item.confirmationExpiresAt?.toDate?.()).filter(Boolean);
   const expiry = expiryDates.length ? new Date(Math.min(...expiryDates.map((item) => item.getTime()))) : null;
   function handleConfirmClick() {
-    const whatsappWindow = booking.coachPhone ? window.open("about:blank", "_blank") : null;
+    const whatsappWindow = getCoachWhatsAppNumber(booking) ? window.open("about:blank", "_blank") : null;
     if (whatsappWindow) whatsappWindow.opener = null;
     if (isBundle) onConfirmBundle(group, whatsappWindow);
     else onConfirm(booking, whatsappWindow);
@@ -4548,7 +4549,7 @@ export default function App() {
           coachId: coach.coachId,
           coachName: coach.coachName || coach.name || coach.email || coach.coachId || "Coach",
           coachEmail: coach.coachEmail || coach.email || "",
-          coachPhone: coach.coachPhone || coach.phone || coach.whatsapp || "",
+          coachPhone: coach.coachPhone || coach.phone || coach.whatsapp || (isPrimaryIlhamCoachName(coach.coachName || coach.name || coach.email) ? primaryIlhamWhatsAppNumber : ""),
           role: coach.role,
         });
       }
@@ -6028,6 +6029,7 @@ export default function App() {
   );
   /* eslint-enable no-unreachable */
 }
+
 
 
 
