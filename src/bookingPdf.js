@@ -97,10 +97,14 @@ function drawWrappedText(commands, text, x, y, maxChars, options = {}) {
   return lines.length;
 }
 
-function drawDetailRow(commands, label, value, y) {
-  drawText(commands, label, 74, y, { size: 12, color: "#a3a3a3" });
-  drawWrappedText(commands, value || "-", 74, y - 23, 52, { size: 14, color: "#ffffff", lineHeight: 17 });
-  commands.push(`0.6 w ${pdfColor("#262626")} RG 74 ${y - 38} 447 0 m 521 ${y - 38} l S`);
+function drawDetailRow(commands, label, value, x, y, width = 205) {
+  drawText(commands, label, x, y, { size: 9, color: "#a3a3a3" });
+  drawWrappedText(commands, value || "-", x, y - 16, Math.floor(width / 7), {
+    size: 11,
+    color: "#ffffff",
+    lineHeight: 13,
+  });
+  commands.push(`0.5 w ${pdfColor("#262626")} RG ${x} ${y - 34} ${width} 0 m ${x + width} ${y - 34} l S`);
 }
 
 export function downloadBookingPdf(booking) {
@@ -150,10 +154,14 @@ export function downloadBookingPdf(booking) {
     ["Booking Created", formatTimestamp(booking.createdAt)],
   ];
 
-  let y = 548;
-  rows.forEach(([label, value]) => {
-    drawDetailRow(commands, label, value, y);
-    y -= 55;
+  const detailStartY = 548;
+  const detailColumns = [74, 304];
+  const detailColumnWidth = 205;
+
+  rows.forEach(([label, value], index) => {
+    const column = index % 2;
+    const row = Math.floor(index / 2);
+    drawDetailRow(commands, label, value, detailColumns[column], detailStartY - row * 58, detailColumnWidth);
   });
 
   fillRect(commands, 74, 64, 447, 54, "#101010");
@@ -196,3 +204,4 @@ export function downloadBookingPdf(booking) {
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
