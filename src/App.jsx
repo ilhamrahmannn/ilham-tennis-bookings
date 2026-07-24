@@ -430,6 +430,22 @@ function isPrimaryIlhamCoachName(name) {
   return ["ilham", "ilham rahman"].includes(normalizedName);
 }
 
+const primaryIlhamWhatsAppNumber = "601137507963";
+
+function getCoachWhatsAppNumber(booking) {
+  const savedPhone =
+    booking?.coachPhone ||
+    booking?.coachWhatsapp ||
+    booking?.coachWhatsApp ||
+    booking?.coachPhoneNumber ||
+    booking?.whatsapp ||
+    "";
+
+  if (savedPhone) return savedPhone;
+  if (isPrimaryIlhamCoachName(booking?.coachName)) return primaryIlhamWhatsAppNumber;
+  return "";
+}
+
 function getCurrentCustomerCount(bookings) {
   const customerNames = new Set();
 
@@ -6029,6 +6045,7 @@ export default function App() {
   );
   /* eslint-enable no-unreachable */
 }
+
 
 
 
