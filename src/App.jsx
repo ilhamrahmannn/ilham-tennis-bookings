@@ -3820,7 +3820,7 @@ function HomePage({ area = "" }) {
 function CustomerHeader({ user, profile }) {
   return (
     <header className="premium-customer-header mb-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
-      <a href="/" className="font-bold text-lime-300">Ilham Tennis Academy</a>
+      <a href="/" className="font-bold text-lime-300">Coach Ilham Academy</a>
       <nav className="flex flex-wrap items-center gap-3 text-sm">
         <a href="/booking" className="hover:text-lime-300">Book a Session</a>
         <a href="/my-bookings" className="hover:text-lime-300">My Bookings</a>
@@ -3988,7 +3988,7 @@ function SuccessPage({ booking, bundleBookings = [], user, profile }) {
     <div className="my-6 rounded-2xl bg-lime-400/10 p-5"><p className="text-sm text-lime-300">{isBundle ? "Bundle Reference" : "Booking Reference"}</p><p className="mt-1 text-2xl font-bold text-lime-300">{isBundle ? booking.bundleReference : booking.bookingReference}</p></div>
     <div className={isBundle ? "space-y-4" : ""}>{group.map((item, index) => <article key={item.id} className={isBundle ? "rounded-2xl border border-neutral-800 bg-neutral-950 p-5" : ""}>{isBundle && <div className="mb-2 flex items-center justify-between gap-3"><p className="text-xs font-semibold uppercase tracking-widest text-lime-300">Session {index + 1}</p><button type="button" onClick={() => downloadBookingPdf(item)} className="rounded-xl border border-neutral-700 px-3 py-2 text-xs">Download PDF</button></div>}<BookingDetails booking={item} /></article>)}</div>
     <div className="mt-7 grid gap-3 sm:grid-cols-3">
-      {!isBundle && <button type="button" onClick={() => downloadBookingPdf(booking)} className="rounded-2xl bg-white py-3 font-semibold text-black">Download Booking PDF</button>}
+      {!isBundle && <button type="button" onClick={() => downloadBookingPdf(booking)} className="rounded-2xl bg-lime-400 py-3 font-semibold text-black shadow-lg shadow-lime-900/20 transition hover:bg-lime-300">Download Booking PDF</button>}
       <a href="/my-bookings" className="rounded-2xl border border-neutral-700 py-3 text-center font-semibold">View My Bookings</a>
       <a href="/booking" className="rounded-2xl border border-neutral-700 py-3 text-center font-semibold">Book Another Session</a>
     </div>
@@ -4051,7 +4051,7 @@ function MyBookingsPage({ bookings, packages, user, profile }) {
 
 function BookingDetailPage({ booking, user, profile }) {
   if (!booking || booking.customerId !== user?.uid) return <CustomerShell user={user} profile={profile}><p>Booking not found.</p></CustomerShell>;
-  return <CustomerShell user={user} profile={profile} title={booking.bookingReference || "Booking Detail"}><BookingDetails booking={booking} />{booking.status === "confirmed" && <button type="button" onClick={() => downloadBookingPdf(booking)} className="mt-6 rounded-2xl bg-white px-5 py-3 font-semibold text-black">Download Booking PDF</button>}</CustomerShell>;
+  return <CustomerShell user={user} profile={profile} title={booking.bookingReference || "Booking Detail"}><BookingDetails booking={booking} />{booking.status === "confirmed" && <button type="button" onClick={() => downloadBookingPdf(booking)} className="mt-6 rounded-2xl bg-lime-400 px-5 py-3 font-semibold text-black shadow-lg shadow-lime-900/20 transition hover:bg-lime-300">Download Booking PDF</button>}</CustomerShell>;
 }
 
 function ProfilePage({ user, profile }) {
@@ -6028,6 +6028,8 @@ export default function App() {
   );
   /* eslint-enable no-unreachable */
 }
+
+
 
 
 

@@ -1732,3 +1732,47 @@ tbody tr:hover td {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Customer header readability fix */
+.premium-customer-header {
+  background: #fffdf7 !important;
+  border: 1px solid #ded5c5 !important;
+  color: #08271e !important;
+  box-shadow: 0 10px 26px rgba(8, 39, 30, 0.06);
+}
+
+.premium-customer-header > a {
+  color: #8fbd32 !important;
+}
+
+.premium-customer-header nav a {
+  color: #51655b !important;
+  font-weight: 700;
+}
+
+.premium-customer-header nav a:hover {
+  color: #08271e !important;
+}
+
+.premium-customer-header span {
+  color: #08271e !important;
+  font-weight: 600;
+}
+
+.premium-customer-header button {
+  background: #ffffff !important;
+  border-color: #cfc4b3 !important;
+  color: #08271e !important;
+  font-weight: 700;
+}
+
+.premium-customer-header button:hover {
+  border-color: #8fbd32 !important;
+  color: #08271e !important;
+}
+
+/* Keep customer brand name in proper case */
+.premium-customer-header > a {
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
