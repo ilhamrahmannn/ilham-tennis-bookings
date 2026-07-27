@@ -229,6 +229,16 @@ tbody tr:hover td {
   text-transform: uppercase;
 }
 
+.premium-topbar-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+#our-coaches {
+  scroll-margin-top: 1.5rem;
+}
+
 .premium-hero {
   position: relative;
   min-height: 650px;
@@ -510,6 +520,276 @@ tbody tr:hover td {
   color: #738179;
   font-size: 0.75rem;
   line-height: 1.55;
+}
+
+.premium-coach-slider {
+  position: relative;
+  z-index: 3;
+  margin-top: 1.25rem;
+  padding: clamp(1rem, 2vw, 1.5rem);
+  border: 1px solid #d8d3c8;
+  border-radius: 12px;
+  background: #f3f0e7;
+  color: #08271e;
+}
+
+.premium-coach-slider-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.35rem 0.25rem 1.25rem;
+}
+
+.premium-coach-slider-heading p {
+  color: #d95f43;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.premium-coach-slider-heading h2 {
+  margin-top: 0.3rem;
+  font-size: clamp(1.7rem, 4vw, 2.8rem);
+}
+
+.premium-coach-slider-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.premium-coach-slider-controls button {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid #bfc2b7;
+  background: #fff;
+  font-size: 1.1rem;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.premium-coach-slider-controls button:hover,
+.premium-coach-slider-controls button:focus-visible {
+  background: #08271e;
+  color: #fff;
+  outline: none;
+}
+
+.premium-coach-slider-controls span {
+  min-width: 2.7rem;
+  color: #6b7771;
+  font-size: 0.7rem;
+  text-align: center;
+}
+
+.premium-coach-profile {
+  position: relative;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  overflow: hidden;
+  border-radius: 12px;
+  background: #08271e;
+  color: #fff;
+  animation: premium-coach-profile-in 240ms ease-out;
+}
+
+@keyframes premium-coach-profile-in {
+  from { opacity: 0.55; transform: translateX(10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.premium-coach-profile-media {
+  position: relative;
+  min-height: 560px;
+}
+
+.premium-coach-profile-media::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 55%, rgba(5, 24, 18, 0.72));
+  content: "";
+}
+
+.premium-coach-profile-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+.premium-coach-profile-media > span {
+  position: absolute;
+  z-index: 1;
+  right: 1.5rem;
+  bottom: 1.5rem;
+  left: 1.5rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background: rgba(8, 39, 30, 0.74);
+  font-family: "Manrope", sans-serif;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: center;
+  text-transform: uppercase;
+  backdrop-filter: blur(8px);
+}
+
+.premium-coach-profile-copy {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: clamp(2rem, 5vw, 4.5rem);
+}
+
+.premium-coach-profile-copy > p:first-child {
+  color: #a8c94a;
+  font-family: "Manrope", sans-serif;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.premium-coach-profile-copy h3 {
+  margin-top: 0.7rem;
+  font-size: clamp(2.5rem, 5vw, 4.7rem);
+  line-height: 0.98;
+}
+
+.premium-coach-profile-intro {
+  max-width: 38rem;
+  margin-top: 1.4rem;
+  color: #cad5d0;
+  font-size: 1rem;
+  line-height: 1.75;
+}
+
+.premium-coach-profile-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 2rem;
+  border-block: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.premium-coach-profile-stats > div {
+  min-width: 0;
+  padding: 1.25rem 1rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.premium-coach-profile-stats > div:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.premium-coach-profile-stats strong,
+.premium-coach-profile-stats span {
+  display: block;
+}
+
+.premium-coach-profile-stats strong {
+  color: #b7d45d;
+  font-family: "Manrope", sans-serif;
+  font-size: 1.65rem;
+}
+
+.premium-coach-profile-stats span {
+  margin-top: 0.3rem;
+  color: #9eb0a7;
+  font-size: 0.67rem;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.premium-coach-profile-history {
+  margin-top: 1.8rem;
+}
+
+.premium-coach-profile-history > span {
+  color: #aebcb5;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.premium-coach-profile-history ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.8rem;
+}
+
+.premium-coach-profile-history li {
+  padding: 0.55rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #dce4e0;
+  font-size: 0.72rem;
+  list-style: none;
+}
+
+.premium-coach-profile-copy > a {
+  align-self: flex-start;
+  margin-top: 2rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid #a8c94a;
+  color: #c3df68;
+  font-family: "Manrope", sans-serif;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.premium-coach-slider-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+}
+
+.premium-coach-slider-tabs button {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem;
+  border: 1px solid #d4d0c6;
+  background: #fff;
+  color: #08271e;
+  text-align: left;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.premium-coach-slider-tabs button.is-active {
+  border-color: #6f962a;
+  box-shadow: inset 0 -3px #92bd36;
+}
+
+.premium-coach-slider-tabs img {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.premium-coach-slider-tabs strong,
+.premium-coach-slider-tabs small {
+  display: block;
+}
+
+.premium-coach-slider-tabs strong {
+  font-size: 0.76rem;
+}
+
+.premium-coach-slider-tabs small {
+  margin-top: 0.2rem;
+  color: #728078;
+  font-size: 0.63rem;
 }
 
 .premium-trust-strip {
@@ -1445,6 +1725,18 @@ tbody tr:hover td {
 }
 
 @media (max-width: 1024px) {
+  .premium-coach-slider-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .premium-coach-profile {
+    grid-template-columns: 1fr;
+  }
+
+  .premium-coach-profile-media {
+    min-height: 500px;
+  }
+
   .premium-home::before {
     right: -35%;
     width: 90%;
@@ -1491,12 +1783,38 @@ tbody tr:hover td {
 }
 
 @media (max-width: 640px) {
+  .premium-coach-slider-heading {
+    align-items: flex-start;
+  }
+
+  .premium-coach-slider-tabs {
+    grid-template-columns: 1fr;
+  }
+
+  .premium-coach-profile-media {
+    min-height: 420px;
+  }
+
+  .premium-coach-profile-copy {
+    padding: 2rem 1.35rem 2.5rem;
+  }
+
+  .premium-coach-profile-stats strong {
+    font-size: 1.25rem;
+  }
+
+  .premium-coach-profile-stats span {
+    font-size: 0.58rem;
+  }
+
   .premium-home-shell {
     padding-inline: 1.25rem !important;
   }
 
   .premium-topbar {
     min-height: 72px;
+    flex-wrap: wrap;
+    padding-block: 0.65rem;
   }
 
   .premium-topbar::before {
@@ -1506,6 +1824,10 @@ tbody tr:hover td {
   .premium-topbar a {
     padding: 0.65rem 0.8rem;
     font-size: 0.6rem;
+  }
+
+  .premium-topbar-nav {
+    gap: 0.35rem;
   }
 
   .premium-hero {
@@ -1674,13 +1996,33 @@ tbody tr:hover td {
 .premium-area-options span { margin-top: 0.7rem; color: #59645f; line-height: 1.6; }
 .premium-area-options b { margin-top: auto; padding-top: 1.25rem; color: #527c1f; }
 
+.premium-topbar a,
 .premium-area-change {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
   border: 1px solid rgba(255, 255, 255, 0.32);
   padding: 0.65rem 0.9rem;
+  background: transparent;
   color: inherit;
+  font-family: "Manrope", sans-serif;
   font-size: 0.72rem;
-  letter-spacing: 0.05em;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
+  transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+}
+
+.premium-topbar a:hover,
+.premium-topbar a:focus-visible,
+.premium-area-change:hover,
+.premium-area-change:focus-visible {
+  border-color: #a8c94a;
+  background: rgba(168, 201, 74, 0.08);
+  color: #c3df68;
+  outline: none;
 }
 
 .premium-coach-avatar {
@@ -1712,7 +2054,12 @@ tbody tr:hover td {
   .premium-location-seo > div { grid-template-columns: 1fr; }
   .premium-area-options button { min-height: 175px; }
   .premium-topbar { gap: 0.75rem; }
-  .premium-area-change { font-size: 0.58rem; }
+  .premium-topbar a,
+  .premium-area-change {
+    min-height: 40px;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.58rem;
+  }
 }
 
 .premium-booking-page button.bg-white {
