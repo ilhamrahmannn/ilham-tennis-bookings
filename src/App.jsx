@@ -1,6 +1,6 @@
 ﻿import coachImage from "./assets/ilham.jpg";
 import aminurIlhamImage from "./assets/aminur-ilham.jpg";
-import coachAsyrafImage from "./assets/coach-asyraf.jpg";
+import coachAsyrafImage from "./assets/coach-asyraf-profile.jpg";
 import coachZaynSyafiqImage from "./assets/coach-zayn-syafiq.png";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, signOut } from "firebase/auth";
 import { Timestamp, addDoc, collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, query, runTransaction, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
