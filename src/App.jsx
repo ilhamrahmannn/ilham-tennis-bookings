@@ -757,8 +757,24 @@ function getUserRole(userProfile) {
   return userProfile?.role || roles.VIEWER;
 }
 
+function getCoachDisplayName(value) {
+  const name = String(value || "").trim();
+  return name.toLowerCase() === "muhammad rafie" ? "Coach Rafie" : name;
+}
+
+function normalizeCoachDisplayFields(record) {
+  if (!record) return record;
+  return {
+    ...record,
+    coachName: getCoachDisplayName(record.coachName),
+    fromCoachName: getCoachDisplayName(record.fromCoachName),
+    toCoachName: getCoachDisplayName(record.toCoachName),
+    updatedByName: getCoachDisplayName(record.updatedByName),
+  };
+}
+
 function getCoachName(user, userProfile) {
-  return userProfile?.coachName || user?.displayName || user?.email || "Coach";
+  return getCoachDisplayName(userProfile?.coachName || user?.displayName || user?.email || "Coach");
 }
 
 function getCoachId(user, userProfile) {
@@ -806,7 +822,7 @@ function canViewBookingForAdmin(booking, user, userProfile, selectedCoach) {
 }
 
 function getBookingCoachLabel(booking) {
-  return booking.coachName || booking.coachEmail || "Unknown coach";
+  return getCoachDisplayName(booking.coachName || booking.coachEmail || "Unknown coach");
 }
 
 function cleanTableValue(value) {
@@ -4714,7 +4730,7 @@ export default function App() {
       if (!coachesById.has(coach.coachId)) {
         coachesById.set(coach.coachId, {
           coachId: coach.coachId,
-          coachName: coach.coachName || coach.name || coach.email || coach.coachId || "Coach",
+          coachName: getCoachDisplayName(coach.coachName || coach.name || coach.email || coach.coachId || "Coach"),
           coachEmail: coach.coachEmail || coach.email || "",
           coachPhone: coach.coachPhone || coach.phone || coach.whatsapp || (isPrimaryIlhamCoachName(coach.coachName || coach.name || coach.email) ? primaryIlhamWhatsAppNumber : ""),
           role: coach.role,
@@ -5038,7 +5054,7 @@ export default function App() {
     if (!adminUser) {
       return undefined;
     }
-    const sortAndSet = (items) => setBookings([...items].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || allTimeSlots.indexOf(a.time) - allTimeSlots.indexOf(b.time)));
+    const sortAndSet = (items) => setBookings(items.map(normalizeCoachDisplayFields).sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || allTimeSlots.indexOf(a.time) - allTimeSlots.indexOf(b.time)));
     if (isAdminPage) {
       if (!adminProfile) return undefined;
       const bookingSource = getUserRole(adminProfile) === roles.SUPER_ADMIN ? collection(db, "bookings") : query(collection(db, "bookings"), where("coachId", "==", getCoachId(adminUser, adminProfile)));
@@ -5089,7 +5105,7 @@ export default function App() {
     const unsubscribe = onSnapshot(
       packageSource,
       (snapshot) => {
-        const nextPackages = snapshot.docs.map((packageDoc) => ({
+        const nextPackages = snapshot.docs.map((packageDoc) => normalizeCoachDisplayFields({
           id: packageDoc.id,
           ...packageDoc.data(),
         }));
@@ -5117,7 +5133,7 @@ export default function App() {
     const unsubscribe = onSnapshot(
       notificationSource,
       (snapshot) => {
-        const nextNotifications = snapshot.docs.map((notificationDoc) => ({
+        const nextNotifications = snapshot.docs.map((notificationDoc) => normalizeCoachDisplayFields({
           id: notificationDoc.id,
           ...notificationDoc.data(),
         }));
@@ -5152,7 +5168,7 @@ export default function App() {
     const unsubscribe = onSnapshot(
       collection(db, "coaches"),
       (snapshot) => {
-        const nextCoaches = snapshot.docs.map((coachDoc) => ({
+        const nextCoaches = snapshot.docs.map((coachDoc) => normalizeCoachDisplayFields({
           id: coachDoc.id,
           coachId: coachDoc.data().coachId || coachDoc.id,
           ...coachDoc.data(),
@@ -5174,7 +5190,7 @@ export default function App() {
     const unsubscribe = onSnapshot(
       collection(db, "transferLogs"),
       (snapshot) => {
-        const nextLogs = snapshot.docs.map((logDoc) => ({
+        const nextLogs = snapshot.docs.map((logDoc) => normalizeCoachDisplayFields({
           id: logDoc.id,
           ...logDoc.data(),
         }));
@@ -5200,11 +5216,17 @@ export default function App() {
     const unsubscribe = onSnapshot(
       collection(db, "users"),
       (snapshot) => {
-        const nextUsers = snapshot.docs.map((userDoc) => ({
-          id: userDoc.id,
-          uid: userDoc.data().uid || userDoc.id,
-          ...userDoc.data(),
-        }));
+        const nextUsers = snapshot.docs.map((userDoc) => {
+          const userData = userDoc.data();
+          const normalized = normalizeCoachDisplayFields({
+            id: userDoc.id,
+            uid: userData.uid || userDoc.id,
+            ...userData,
+          });
+          return [roles.COACH, roles.SUPER_ADMIN].includes(userData.role)
+            ? { ...normalized, name: getCoachDisplayName(normalized.name) }
+            : normalized;
+        });
 
         nextUsers.sort((a, b) => String(a.name || a.email || "").localeCompare(String(b.name || b.email || "")));
         setUsers(nextUsers);
