@@ -2052,7 +2052,8 @@ function TransferSessionModal({ booking, coaches, user, userProfile, onClose }) 
 }
 
 function getAreaFromPath(pathname) {
-  if (pathname === trainingAreas.jb.slug || pathname === trainingAreas.kl.slug) return "jb";
+  if (pathname === trainingAreas.kl.slug) return "kl";
+  if (pathname === trainingAreas.jb.slug) return "jb";
   return "";
 }
 
@@ -2068,7 +2069,7 @@ function isBeforeKualaLumpurStart(date) {
 function getStoredTrainingArea() {
   try {
     const value = window.localStorage.getItem("coach-ilham-training-area");
-    return value === "jb" ? "jb" : "";
+    return value === "kl" || value === "jb" ? value : "";
   } catch {
     return "";
   }
@@ -3665,6 +3666,12 @@ function AreaSelectionModal({ onSelect }) {
         <h2 id="area-picker-title">Where would you like to train?</h2>
         <span>Select your area to see the correct coaches, venues and available sessions.</span>
         <div className="premium-area-options">
+          <button type="button" onClick={() => onSelect("kl")}>
+            <small>Available from 1 October 2026</small>
+            <strong>Kuala Lumpur</strong>
+            <span>Book private coaching with Coach Ilham at Jalan Duta or your preferred Kuala Lumpur court.</span>
+            <b>Choose Kuala Lumpur &rarr;</b>
+          </button>
           <button type="button" onClick={() => onSelect("jb")}>
             <small>Available now</small>
             <strong>Johor Bahru</strong>
@@ -3678,7 +3685,7 @@ function AreaSelectionModal({ onSelect }) {
 }
 
 function HomePage({ area = "" }) {
-  const [showAreaPicker, setShowAreaPicker] = useState(false);
+  const [showAreaPicker, setShowAreaPicker] = useState(() => !area);
   const [activeCoachProfile, setActiveCoachProfile] = useState(area === "jb" ? 1 : 0);
   const activeArea = trainingAreas[area] || null;
   const isKualaLumpur = area === "kl";
@@ -4643,7 +4650,7 @@ export default function App() {
   const pathArea = getAreaFromPath(currentPath);
   const selectedArea = (() => {
     const queryArea = searchParams.get("area");
-    return queryArea === "jb" ? "jb" : pathArea || getStoredTrainingArea() || "jb";
+    return queryArea === "kl" || queryArea === "jb" ? queryArea : pathArea || getStoredTrainingArea() || "jb";
   })();
   const isAdminPage = currentPath === "/admin";
   const isBookingPage = currentPath === "/booking";
@@ -4785,7 +4792,7 @@ export default function App() {
     const areaCoaches = Array.from(coachesById.values()).filter((coach) => {
       const isCoachIlham = coach.role === roles.SUPER_ADMIN || isPrimaryIlhamCoachName(coach.coachName);
       if (selectedArea === "kl") return isCoachIlham;
-      if (selectedArea === "jb") return true;
+      if (selectedArea === "jb") return !isCoachIlham;
       return true;
     });
 
