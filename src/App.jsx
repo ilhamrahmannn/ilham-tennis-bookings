@@ -1,7 +1,10 @@
-﻿import coachImage from "./assets/ilham.jpg";
-import aminurIlhamImage from "./assets/aminur-ilham.jpg";
-import coachAsyrafImage from "./assets/coach-asyraf-profile.jpg";
-import coachZaynSyafiqImage from "./assets/coach-zayn-syafiq.png";
+import coachImage from "./assets/coach-ilham-2026.jpg";
+import coachNasranImage from "./assets/coach-nasran-2026.jpg";
+import aminurIlhamImage from "./assets/coach-aminur-ilham-2026.jpg";
+import coachAsyrafImage from "./assets/coach-asyraf-2026.jpg";
+import coachZaynSyafiqImage from "./assets/coach-zayn-syafiq-2026.jpg";
+import coachRafieImage from "./assets/coach-rafie-2026.jpg";
+import coachInActionLogo from "./assets/coach-in-action-logo.png";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, signOut } from "firebase/auth";
 import { Timestamp, addDoc, collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, query, runTransaction, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
 import { Bell, ClipboardCopy, Download, ExternalLink, MessageCircle, Users } from "lucide-react";
@@ -3658,14 +3661,14 @@ function AreaSelectionModal({ onSelect }) {
   return (
     <div className="premium-area-overlay" role="dialog" aria-modal="true" aria-labelledby="area-picker-title">
       <div className="premium-area-modal">
-        <p>Coach Ilham Academy</p>
+        <p>COACH IN ACTION</p>
         <h2 id="area-picker-title">Where would you like to train?</h2>
         <span>Select your area to see the correct coaches, venues and available sessions.</span>
         <div className="premium-area-options">
           <button type="button" onClick={() => onSelect("jb")}>
             <small>Available now</small>
             <strong>Johor Bahru</strong>
-            <span>Book with the Coach Ilham Academy coaching team in Johor Bahru.</span>
+            <span>Book with the COACH IN ACTION coaching team in Johor Bahru.</span>
             <b>Choose Johor Bahru &rarr;</b>
           </button>
         </div>
@@ -3686,7 +3689,7 @@ function HomePage({ area = "" }) {
   const heroDescription = isKualaLumpur
     ? "Book private tennis lessons in Kuala Lumpur with Coach Ilham for kids and adults, from complete beginners to experienced players who want focused, personalised training."
     : area === "jb"
-      ? "Book tennis lessons in Johor Bahru with the Coach Ilham Academy coaching team for kids, adults, private sessions and structured group coaching."
+      ? "Book tennis lessons in Johor Bahru with the COACH IN ACTION coaching team for kids, adults, private sessions and structured group coaching."
       : "Choose Kuala Lumpur or Johor Bahru to view local coaches, venues and real-time tennis coaching availability.";
   const coachProfiles = [
     {
@@ -3704,6 +3707,22 @@ function HomePage({ area = "" }) {
       ],
       historyLabel: "Coaching focus",
       history: ["Private coaching", "Kids and adults", "Beginner development", "Goal-based training"],
+    },
+    {
+      name: "Coach Nasran",
+      area: "Johor Bahru",
+      areaId: "jb",
+      image: coachNasranImage,
+      badge: "Johor Bahru · Tennis Coaching Level 1",
+      imageAlt: "Coach Nasran, Tennis Coaching Level 1 coach in Johor Bahru",
+      intro: "Wan Ahmad Nasran is a 29-year-old coach with 20 years of tennis experience and 10 years of coaching experience.",
+      stats: [
+        { value: "20", label: "Years playing tennis" },
+        { value: "10", label: "Years coaching" },
+        { value: "Level 1", label: "Tennis coaching" },
+      ],
+      historyLabel: "Professional experience",
+      history: ["Malaysian Tennis Academy LTAM coaching staff (2022)", "Former state player", "Former national player", "Government school Physical Education teacher"],
     },
     {
       name: "Coach Aminur Ilham",
@@ -3753,6 +3772,23 @@ function HomePage({ area = "" }) {
       historyLabel: "Professional qualifications",
       history: ["ITF Level 1 Certificate", "Sport Science Level 1"],
     },
+    {
+      name: "Coach Rafie",
+      fullName: "Muhammad Rafie",
+      area: "Johor Bahru",
+      areaId: "jb",
+      image: coachRafieImage,
+      badge: "Johor Bahru · Sport Science Level 1",
+      imageAlt: "Coach Rafie, tennis coach in Johor Bahru",
+      intro: "Muhammad Rafie is a 28-year-old coach with 18 years of tennis experience and 9 years of coaching experience.",
+      stats: [
+        { value: "18", label: "Years playing tennis" },
+        { value: "9", label: "Years coaching" },
+        { value: "SS L1", label: "Sport Science" },
+      ],
+      historyLabel: "Professional experience",
+      history: ["Assistant Coach, SUKMA Perak", "Sport Science Level 1"],
+    },
   ];
   const displayedCoach = coachProfiles[activeCoachProfile];
 
@@ -3764,8 +3800,8 @@ function HomePage({ area = "" }) {
     const title = isKualaLumpur
       ? "Tennis Coach Kuala Lumpur | Private Tennis Lessons | Coach Ilham"
       : area === "jb"
-        ? "Tennis Coach Johor Bahru | Tennis Lessons | Coach Ilham Academy"
-        : "Coach Ilham Academy | Tennis Coaching Kuala Lumpur & Johor Bahru";
+        ? "Tennis Coach Johor Bahru | Tennis Lessons | COACH IN ACTION"
+        : "COACH IN ACTION | Tennis Coaching Kuala Lumpur & Johor Bahru";
     const description = isKualaLumpur
       ? "Book a certified tennis coach in Kuala Lumpur. Private tennis lessons for kids and adults at Jalan Duta or your preferred KL court from 1 October 2026."
       : area === "jb"
@@ -3797,7 +3833,7 @@ function HomePage({ area = "" }) {
     structuredData.textContent = JSON.stringify({
       "@context": "https://schema.org",
       "@type": "SportsActivityLocation",
-      name: isKualaLumpur ? "Coach Ilham Academy Kuala Lumpur" : area === "jb" ? "Coach Ilham Academy Johor Bahru" : "Coach Ilham Academy",
+      name: isKualaLumpur ? "COACH IN ACTION Kuala Lumpur" : area === "jb" ? "COACH IN ACTION Johor Bahru" : "COACH IN ACTION",
       url: `https://ilhamacademy.pages.dev${canonicalPath}`,
       telephone: "+601137507963",
       sport: "Tennis",
@@ -3816,6 +3852,10 @@ function HomePage({ area = "" }) {
       {showAreaPicker && <AreaSelectionModal onSelect={selectArea} />}
       <div className="premium-home-shell w-full max-w-6xl mx-auto px-4 py-8 sm:px-5 sm:py-12">
         <div className="premium-topbar flex justify-between mb-6">
+          <a href={activeArea?.slug || "/"} className="premium-brand" aria-label="COACH IN ACTION home">
+            <img src={coachInActionLogo} alt="" />
+            <span>COACH IN ACTION</span>
+          </a>
           <nav className="premium-topbar-nav" aria-label="Homepage navigation">
             <button type="button" onClick={() => setShowAreaPicker(true)} className="premium-area-change">
               {activeArea ? `${activeArea.name} · Change area` : "Choose training area"}
@@ -3850,7 +3890,7 @@ function HomePage({ area = "" }) {
             </p>
 
             <p className="premium-location mt-3 text-neutral-400">
-              {isKualaLumpur ? "Available from 1 October 2026 at Jalan Duta National Tennis Centre or your preferred Kuala Lumpur court." : area === "jb" ? "Coaching sessions in Johor Bahru with the Coach Ilham Academy team." : "Choose your city to view local availability."}
+              {isKualaLumpur ? "Available from 1 October 2026 at Jalan Duta National Tennis Centre or your preferred Kuala Lumpur court." : area === "jb" ? "Coaching sessions in Johor Bahru with the COACH IN ACTION team." : "Choose your city to view local availability."}
             </p>
 
             <div className="premium-hero-actions">
@@ -3861,8 +3901,8 @@ function HomePage({ area = "" }) {
 
           <div className="premium-portrait-wrap flex justify-center">
             <img
-              src={area === "jb" ? aminurIlhamImage : coachImage}
-              alt={area === "jb" ? "Coach Aminur Ilham in Johor Bahru" : "Coach Ilham in Kuala Lumpur"}
+              src={area === "jb" ? coachNasranImage : coachImage}
+              alt={area === "jb" ? "Coach Nasran in Johor Bahru" : "Coach Ilham in Kuala Lumpur"}
               className="premium-portrait w-full max-w-sm sm:max-w-md rounded-3xl border border-neutral-800 object-cover shadow-2xl"
             />
           </div>
@@ -3872,11 +3912,11 @@ function HomePage({ area = "" }) {
           <article className="premium-coach-preview">
             <div className="premium-guide-label">Choose your coach</div>
             <div className="premium-coach-preview-card">
-              <img src={area === "jb" ? aminurIlhamImage : coachImage} alt="" />
+              <img src={area === "jb" ? coachNasranImage : coachImage} alt="" />
               <div>
-                <strong>{area === "jb" ? "Coach Aminur Ilham" : "Coach Ilham"}</strong>
+                <strong>{area === "jb" ? "Coach Nasran" : "Coach Ilham"}</strong>
                 <span>{area === "jb" ? "Tennis Coaching Level 1" : "ITF Level 1 - Sport Science Level 1"}</span>
-                <small>{area === "jb" ? "Johor Bahru · 5 years coaching experience" : "Kuala Lumpur · Private coaching for kids and adults"}</small>
+                <small>{area === "jb" ? "Johor Bahru · 10 years coaching experience" : "Kuala Lumpur · Private coaching for kids and adults"}</small>
               </div>
               <span aria-hidden="true"></span>
             </div>
@@ -3907,10 +3947,14 @@ function HomePage({ area = "" }) {
 
           <article key={displayedCoach.name} className="premium-coach-profile" aria-live="polite">
             <div className="premium-coach-profile-media">
-              <img
-                src={displayedCoach.image}
-                alt={displayedCoach.imageAlt}
-              />
+              {displayedCoach.image ? (
+                <img src={displayedCoach.image} alt={displayedCoach.imageAlt} />
+              ) : (
+                <div className="premium-coach-profile-placeholder" role="img" aria-label={`${displayedCoach.name} photo coming soon`}>
+                  <strong>{displayedCoach.initials}</strong>
+                  <small>Photo coming soon</small>
+                </div>
+              )}
               <span>{displayedCoach.badge}</span>
             </div>
             <div className="premium-coach-profile-copy">
@@ -3946,7 +3990,7 @@ function HomePage({ area = "" }) {
                 onClick={() => setActiveCoachProfile(index)}
                 className={activeCoachProfile === index ? "is-active" : ""}
               >
-                <img src={coach.image} alt="" />
+                {coach.image ? <img src={coach.image} alt="" /> : <span className="premium-coach-tab-placeholder" aria-hidden="true">{coach.initials}</span>}
                 <span><strong>{coach.name}</strong><small>{coach.area}</small></span>
               </button>
             ))}
@@ -4003,7 +4047,7 @@ function HomePage({ area = "" }) {
 function CustomerHeader({ user, profile }) {
   return (
     <header className="premium-customer-header mb-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
-      <a href="/" className="font-bold text-lime-300">Coach Ilham Academy</a>
+      <a href="/" className="font-bold text-lime-300">COACH IN ACTION</a>
       <nav className="flex flex-wrap items-center gap-3 text-sm">
         <a href="/booking" className="hover:text-lime-300">Book a Session</a>
         <a href="/my-bookings" className="hover:text-lime-300">My Bookings</a>
@@ -4310,7 +4354,7 @@ function BookingPage({
 
         <div className="premium-booking-heading mb-8">
           <p className="inline-block rounded-full border border-lime-400/40 px-4 py-2 text-sm text-lime-300">
-            Coach Ilham Academy - {areaDetails.name}
+            COACH IN ACTION - {areaDetails.name}
           </p>
           <h1 className="mt-5 text-3xl font-bold">Book Your Tennis Session</h1>
           <p className="mt-3 rounded-2xl bg-neutral-900 border border-neutral-800 px-4 py-3 text-sm text-neutral-200">
@@ -6017,7 +6061,7 @@ export default function App() {
             </h1>
 
             <p className="mt-5 text-neutral-300 text-lg">
-              Coach Ilham Academy offers Tennis Lessons Johor Bahru for kids and adults, with private tennis coaching built around your level, your pace, and your goals.
+              COACH IN ACTION offers Tennis Lessons Johor Bahru for kids and adults, with private tennis coaching built around your level, your pace, and your goals.
             </p>
 
             <p className="mt-3 text-neutral-400">

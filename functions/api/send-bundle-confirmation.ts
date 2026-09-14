@@ -64,7 +64,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     const emailResponse = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${env.EMAIL_API_KEY}`, "Content-Type": "application/json", "Idempotency-Key": `bundle-confirmation-${bundleId}` },
-      body: JSON.stringify({ from: env.EMAIL_FROM || "Ilham Tennis Academy <onboarding@resend.dev>", to: customerEmail, subject: "Booking Bundle Confirmed - Ilham Tennis Academy", text }),
+      body: JSON.stringify({ from: env.EMAIL_FROM || "COACH IN ACTION <onboarding@resend.dev>", to: customerEmail, subject: "Booking Bundle Confirmed - COACH IN ACTION", text }),
     });
     if (!emailResponse.ok) return json({ ok: false, error: "Email delivery failed" }, 502);
     return json({ ok: true });

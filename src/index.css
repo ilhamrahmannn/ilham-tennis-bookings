@@ -1,4 +1,4 @@
-﻿@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700&family=Newsreader:ital,opsz,wght@1,6..72,500&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700&family=Newsreader:ital,opsz,wght@1,6..72,500&display=swap");
 @import "tailwindcss";
 
 :root {
@@ -210,7 +210,7 @@ tbody tr:hover td {
 
 .premium-topbar::before {
   margin-right: auto;
-  content: "CIA\A COACH ILHAM ACADEMY";
+  content: "CIA\A COACH IN ACTION";
   white-space: pre;
   font-family: "Manrope", sans-serif;
   font-size: 0.65rem;
@@ -746,7 +746,7 @@ tbody tr:hover td {
 
 .premium-coach-slider-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.75rem;
   margin-top: 0.9rem;
 }
@@ -1716,7 +1716,7 @@ tbody tr:hover td {
 .premium-login-page .premium-panel::before {
   display: block;
   margin-bottom: 1.5rem;
-  content: "COACH ILHAM ACADEMY";
+  content: "COACH IN ACTION";
   font-family: "Manrope", sans-serif;
   font-size: 0.66rem;
   font-weight: 700;
@@ -2141,4 +2141,55 @@ tbody tr:hover td {
 .premium-customer-page .premium-panel .bg-lime-400\/10 p:last-child {
   overflow-wrap: anywhere;
   line-height: 1.1 !important;
+}
+
+/* COACH IN ACTION brand navigation */
+.premium-topbar::before {
+  display: none;
+}
+
+.premium-topbar .premium-brand {
+  display: inline-flex;
+  min-height: 0;
+  align-items: center;
+  gap: 0.75rem;
+  margin-right: auto;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: #fff;
+  letter-spacing: 0.12em;
+  text-decoration: none;
+}
+
+.premium-brand img {
+  width: 50px;
+  height: 50px;
+  padding: 3px;
+  border-radius: 6px;
+  background: #fff;
+  object-fit: contain;
+}
+
+.premium-brand span {
+  font-family: "Manrope", sans-serif;
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .premium-topbar .premium-brand {
+    width: 100%;
+    margin-bottom: 0.35rem;
+  }
+
+  .premium-topbar-nav {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .premium-topbar-nav > * {
+    flex: 0 0 auto;
+  }
 }
