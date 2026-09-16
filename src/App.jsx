@@ -3685,7 +3685,9 @@ function AreaSelectionModal({ onSelect }) {
 }
 
 function HomePage({ area = "" }) {
-  const [showAreaPicker, setShowAreaPicker] = useState(() => !area);
+  const [showAreaPicker, setShowAreaPicker] = useState(() => new URLSearchParams(window.location.search).get("book") === "1");
+  const [areaPickerPurpose, setAreaPickerPurpose] = useState(() => new URLSearchParams(window.location.search).get("book") === "1" ? "booking" : "navigation");
+  const [pendingServiceId, setPendingServiceId] = useState("");
   const [activeCoachProfile, setActiveCoachProfile] = useState(area === "jb" ? 1 : 0);
   const activeArea = trainingAreas[area] || null;
   const isKualaLumpur = area === "kl";
@@ -3851,7 +3853,19 @@ function HomePage({ area = "" }) {
 
   function selectArea(nextArea) {
     saveTrainingArea(nextArea);
+    if (areaPickerPurpose === "booking") {
+      const params = new URLSearchParams({ area: nextArea });
+      if (pendingServiceId) params.set("service", pendingServiceId);
+      window.location.assign(`/booking?${params.toString()}`);
+      return;
+    }
     window.location.assign(trainingAreas[nextArea].slug);
+  }
+
+  function openAreaPicker(purpose = "navigation", serviceId = "") {
+    setAreaPickerPurpose(purpose);
+    setPendingServiceId(serviceId);
+    setShowAreaPicker(true);
   }
 
   return (
@@ -3864,7 +3878,7 @@ function HomePage({ area = "" }) {
             <span>COACH IN ACTION</span>
           </a>
           <nav className="premium-topbar-nav" aria-label="Homepage navigation">
-            <button type="button" onClick={() => setShowAreaPicker(true)} className="premium-area-change">
+            <button type="button" onClick={() => openAreaPicker("navigation")} className="premium-area-change">
               {activeArea ? `${activeArea.name} · Change area` : "Choose training area"}
             </button>
             <a
@@ -3901,7 +3915,7 @@ function HomePage({ area = "" }) {
             </p>
 
             <div className="premium-hero-actions">
-              <a href={bookingUrl} className="premium-primary-cta">Book in {areaName} <span aria-hidden="true">&rarr;</span></a>
+              <button type="button" onClick={() => openAreaPicker("booking")} className="premium-primary-cta">Book Now <span aria-hidden="true">&rarr;</span></button>
               <a href={whatsappUrl} target="_blank" rel="noreferrer" className="premium-whatsapp-cta"><MessageCircle size={18} /> Chat on WhatsApp</a>
             </div>
           </div>
@@ -4009,6 +4023,10 @@ function HomePage({ area = "" }) {
             <a
               key={service.id}
               href={`/booking?service=${service.id}${area ? `&area=${area}` : ""}`}
+              onClick={(event) => {
+                event.preventDefault();
+                openAreaPicker("booking", service.id);
+              }}
               className="premium-service-card rounded-3xl border border-neutral-800 bg-neutral-900 p-5 transition hover:border-lime-400/70 hover:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-lime-400"
             >
               <span className="premium-service-index">0{index + 1}</span>
@@ -4056,7 +4074,7 @@ function CustomerHeader({ user, profile }) {
     <header className="premium-customer-header mb-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
       <a href="/" className="font-bold text-lime-300">COACH IN ACTION</a>
       <nav className="flex flex-wrap items-center gap-3 text-sm">
-        <a href="/booking" className="hover:text-lime-300">Book a Session</a>
+        <a href="/?book=1" className="hover:text-lime-300">Book a Session</a>
         <a href="/my-bookings" className="hover:text-lime-300">My Bookings</a>
         <a href="/my-profile" className="hover:text-lime-300">My Profile</a>
         {user?.photoURL && <img src={user.photoURL} alt="" className="h-8 w-8 rounded-full" referrerPolicy="no-referrer" />}

@@ -319,8 +319,10 @@ tbody tr:hover td {
 }
 
 .premium-primary-cta {
+  border: 0;
   background: var(--premium-lime);
   color: var(--premium-ink);
+  cursor: pointer;
 }
 
 .premium-primary-cta:hover {
