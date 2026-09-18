@@ -762,7 +762,12 @@ function getUserRole(userProfile) {
 
 function getCoachDisplayName(value) {
   const name = String(value || "").trim();
-  return name.toLowerCase() === "muhammad rafie" ? "Coach Rafie" : name;
+  const coachNameAliases = {
+    "muhammad rafie": "Coach Rafie",
+    "wan ahmad nasran": "Coach Nasran",
+  };
+
+  return coachNameAliases[name.toLowerCase()] || name;
 }
 
 function normalizeCoachDisplayFields(record) {

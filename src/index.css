@@ -2181,17 +2181,42 @@ tbody tr:hover td {
 }
 
 @media (max-width: 760px) {
+  .premium-topbar {
+    margin-inline: -1.25rem !important;
+    padding: 0.8rem 1.25rem 1rem;
+    background: var(--premium-ink);
+  }
+
   .premium-topbar .premium-brand {
     width: 100%;
     margin-bottom: 0.35rem;
   }
 
+  .premium-brand img {
+    width: 46px;
+    height: 46px;
+  }
+
   .premium-topbar-nav {
+    display: grid;
     width: 100%;
-    overflow-x: auto;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+    overflow: visible;
   }
 
   .premium-topbar-nav > * {
-    flex: 0 0 auto;
+    min-height: 44px;
+    padding: 0.7rem 0.55rem;
+    border-color: rgba(255, 255, 255, 0.48);
+    background: rgba(255, 255, 255, 0.06);
+    color: #ffffff !important;
+    font-size: 0.64rem;
+    line-height: 1.25;
+    text-align: center;
+  }
+
+  .premium-topbar-nav .premium-area-change {
+    grid-column: 1 / -1;
   }
 }
