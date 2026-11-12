@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { doc, getDocFromServer } from "firebase/firestore";
+import { db } from "./firebase";
 
 const phases = [
   { name: "Ready position", time: 0, cue: "Keep your feet apart, knees soft and racket in front." },
@@ -162,7 +164,7 @@ function drawScene(canvas, pose, angle) {
   queue.sort((a, b) => b.depth - a.depth).forEach(({ paint }) => paint());
 }
 
-export default function ForehandSimulator({ user }) {
+export default function ForehandSimulator() {
   const canvasRef = useRef(null);
   const [motion, setMotion] = useState(null);
   const [error, setError] = useState("");
@@ -176,25 +178,24 @@ export default function ForehandSimulator({ user }) {
   const phase = phases.findLast((item) => item.time <= time);
 
   useEffect(() => {
-    const controller = new AbortController();
+    let active = true;
     async function load() {
       try {
-        const token = await user.getIdToken();
-        const response = await fetch("/api/forehand-motion?uid=" + encodeURIComponent(user.uid), {
-          headers: { Authorization: "Bearer " + token },
-          signal: controller.signal,
-          cache: "no-store",
-        });
-        if (!response.ok) throw new Error("Access verification failed");
-        const data = await response.json();
-        if (!controller.signal.aborted) setMotion(data);
-      } catch {
-        if (!controller.signal.aborted) setError("Could not load the simulator. Try again.");
+        const snapshot = await getDocFromServer(doc(db, "forehandMotion", "rightHanded"));
+        const data = JSON.parse(snapshot.data()?.motion || "null");
+        if (!Array.isArray(data?.frames) || !Array.isArray(data?.times) || data.times.length < 2 || data.frames.length !== data.times.length) {
+          throw new Error("Motion data unavailable");
+        }
+        if (active) setMotion(data);
+      } catch (failure) {
+        if (active) setError(failure.code === "permission-denied"
+          ? "Could not verify access for this account. Reload the page or contact Coach Ilham."
+          : "Could not load the simulator. Try again.");
       }
     }
     void load();
-    return () => controller.abort();
-  }, [user, attempt]);
+    return () => { active = false; };
+  }, [attempt]);
 
   useEffect(() => {
     if (!playing) return;

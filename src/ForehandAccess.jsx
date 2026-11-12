@@ -94,7 +94,7 @@ function SignedInAccess({ user, profile }) {
   if (error) return <p role="alert">{error}</p>;
   if (access === undefined) return <p role="status">Checking access…</p>;
   if (access?.status === "approved") {
-    return <Suspense fallback={<p role="status">Loading simulator…</p>}><Simulator user={user} /></Suspense>;
+    return <Suspense fallback={<p role="status">Loading simulator…</p>}><Simulator /></Suspense>;
   }
   if (access?.status === "pending") {
     return <div role="status"><h2 className="text-xl font-bold">Awaiting approval</h2><p className="mt-2">Coach Ilham will check your payment. This page unlocks once your request is approved.</p></div>;

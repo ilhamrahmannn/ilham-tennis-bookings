@@ -34,6 +34,11 @@ service cloud.firestore {
       allow get: if signedIn() && id == 'payment';
     }
 
+    match /forehandMotion/{id} {
+      allow get: if signedIn() && id == 'rightHanded'
+        && get(/databases/$(database)/documents/forehandAccess/$(request.auth.uid)).data.status == 'approved';
+    }
+
     match /forehandAccess/{uid} {
       function validSubmission() {
         let payment = get(/databases/$(database)/documents/forehandSettings/payment).data;
