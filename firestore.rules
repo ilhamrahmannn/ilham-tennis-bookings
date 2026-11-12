@@ -30,6 +30,28 @@ service cloud.firestore {
         && request.resource.data.role == 'customer';
     }
 
+    match /forehandSettings/{id} {
+      allow get: if signedIn() && id == 'payment';
+    }
+
+    match /forehandAccess/{uid} {
+      function validSubmission() {
+        let payment = get(/databases/$(database)/documents/forehandSettings/payment).data;
+        let data = request.resource.data;
+        return signedIn() && request.auth.uid == uid
+          && data.keys().hasOnly(['email', 'name', 'reference', 'status', 'submittedAt', 'amountSen', 'paymentVersion'])
+          && data.email == request.auth.token.email
+          && data.name is string && data.name.size() <= 120
+          && data.reference is string && data.reference.size() >= 3 && data.reference.size() <= 120
+          && payment.qr is string && payment.amountSen is int && payment.amountSen > 0
+          && data.amountSen == payment.amountSen && data.paymentVersion == payment.updatedAt
+          && data.status == 'pending' && data.submittedAt == request.time;
+      }
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow create: if validSubmission();
+      allow update: if resource.data.status == 'rejected' && validSubmission();
+    }
+
     match /bookings/{bookingId} {
       allow get, list: if isSuperAdmin() || (isCoach() && resource.data.coachId == request.auth.uid) || ownsBooking();
       allow create: if isSuperAdmin()

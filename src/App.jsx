@@ -6,6 +6,7 @@ import coachZaynSyafiqImage from "./assets/coach-zayn-syafiq-2026.jpg";
 import coachRafieImage from "./assets/coach-rafie-2026.jpg";
 import coachInActionLogo from "./assets/coach-in-action-logo.png";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup, signOut } from "firebase/auth";
+import { ForehandAdmin, ForehandPage } from "./ForehandAccess.jsx";
 import { Timestamp, addDoc, collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, query, runTransaction, serverTimestamp, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
 import { Bell, ClipboardCopy, Download, ExternalLink, MessageCircle, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -3368,6 +3369,7 @@ function AdminDashboard({ bookings, packages, customers, notifications, coaches,
         <StudentDirectoryExport bookings={visibleBookings} packages={visiblePackages} customers={customers} />
 
         {isSuperAdmin && <PendingCoachApprovals users={users} user={user} />}
+        {isSuperAdmin && <ForehandAdmin />}
         {isSuperAdmin && <PendingLeaveRequests requests={leaveRequests} bookings={bookings} user={user} />}
 
         {canEdit ? (
@@ -3886,6 +3888,7 @@ function HomePage({ area = "" }) {
             <button type="button" onClick={() => openAreaPicker("navigation")} className="premium-area-change">
               {activeArea ? `${activeArea.name} · Change area` : "Choose training area"}
             </button>
+            <a href="/forehand" className="rounded-full">Forehand 3D</a>
             <a
               href="#our-coaches"
               className="rounded-full border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-lime-400 hover:text-lime-300 transition"
@@ -6001,6 +6004,10 @@ export default function App() {
         authLoading={authLoading}
       />
     );
+  }
+
+  if (currentPath === "/forehand") {
+    return <ForehandPage key={adminUser?.uid || "signed-out"} user={adminUser} profile={customerProfile} loading={authLoading} />;
   }
 
   if (isCustomerPage) {

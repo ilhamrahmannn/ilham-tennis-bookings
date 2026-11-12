@@ -1,0 +1,13 @@
+.forehand-page {
+  background: radial-gradient(ellipse at 80% 0, #213120 0, #101510 35%, #0a0a0a 70%);
+}
+.forehand-stage {
+  display: block;
+  width: 100%;
+  height: clamp(265px, 52vw, 480px);
+  border-radius: 1rem;
+  background: #12201c;
+}
+.forehand-page input[type="range"] {
+  accent-color: #bef264;
+}

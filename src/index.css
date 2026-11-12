@@ -2215,8 +2215,4 @@ tbody tr:hover td {
     line-height: 1.25;
     text-align: center;
   }
-
-  .premium-topbar-nav .premium-area-change {
-    grid-column: 1 / -1;
-  }
 }
